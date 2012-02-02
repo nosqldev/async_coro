@@ -59,6 +59,7 @@
 enum action_t
 {
     act_new_coroutine,
+    act_finished_coroutine,
 
     act_disk_open,
     act_disk_read,
@@ -119,9 +120,10 @@ struct coroutine_env_s
     struct
     {
         volatile uint64_t cid;
-        volatile uint64_t ran; /* how many coroutine had been ran */
+        volatile uint64_t ran; /* how many coroutines had been ran */
     } info;
     ucontext_t manager_context;
+    list_item_ptr(task_queue) curr_task_ptr[MANAGER_CNT];
 
     list_head_ptr(task_queue) timer_queue;
     list_head_ptr(task_queue) todo_queue;
@@ -131,24 +133,25 @@ struct coroutine_env_s
 
 /* }}} */
 
+__thread volatile uint64_t g_thread_id;
 struct coroutine_env_s coroutine_env;
 
 static void *
 new_manager(void *arg)
 {
-    int id;
     list_item_ptr(task_queue) task_ptr;
     ucontext_t task_context;
 
-    id = (intptr_t)arg;
+    g_thread_id = (intptr_t)arg;
 
     for ( ; ; )
     {
-        sem_wait(&coroutine_env.manager_sem[id]);
+        sem_wait(&coroutine_env.manager_sem[g_thread_id]);
         Shift(todo_queue, task_ptr);
         if (task_ptr == NULL)
             continue; /* should never reach here */
 
+loop:
         switch (task_ptr->action)
         {
         case act_new_coroutine:
@@ -162,8 +165,19 @@ new_manager(void *arg)
                         (void(*)(void))task_ptr->args.init_arg.func,
                         1,
                         task_ptr->args.init_arg.func_arg);
+            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
             swapcontext(&coroutine_env.manager_context, &task_context);
 
+            if (task_ptr->action == act_finished_coroutine)
+            {
+                goto loop;
+            }
+
+            break;
+
+        case act_finished_coroutine:
+            acoro_free(coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr);
+            acoro_free(coroutine_env.curr_task_ptr[ g_thread_id ]);
             __sync_add_and_fetch(&coroutine_env.info.ran, 1);
             break;
 
@@ -233,6 +247,12 @@ destroy_coroutine_env()
         close(coroutine_env.pipe_channel[i]);
 
     return 0;
+}
+
+void
+coroutine_set_action_finished()
+{
+    coroutine_env.curr_task_ptr[ g_thread_id ]->action = act_finished_coroutine;
 }
 
 int

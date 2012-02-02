@@ -44,9 +44,10 @@ struct coroutine_env_s
     struct
     {
         volatile uint64_t cid;
-        volatile uint64_t ran; /* how many coroutine had been ran */
+        volatile uint64_t ran; /* how many coroutines had been ran */
     } info;
     ucontext_t manager_context;
+    list_item_ptr(task_queue) curr_task_ptr[MANAGER_CNT];
 
     list_head_ptr(task_queue) timer_queue;
     list_head_ptr(task_queue) todo_queue;
@@ -116,7 +117,7 @@ null_coroutine(void *arg)
 {
     CU_ASSERT((intptr_t)arg == 0xbeef);
 
-    return NULL;
+    crt_exit(NULL);
 }
 
 void
