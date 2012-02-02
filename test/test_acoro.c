@@ -137,8 +137,35 @@ test_null_coroutine(void)
     CU_ASSERT(ret == 0);
 
     usleep(1000*10);
-
     CU_ASSERT(coroutine_env.info.ran == 1);
+}
+
+static int
+mul(int a, int b)
+{
+    return a * b;
+}
+
+static void *
+call_in_coroutine(void *arg)
+{
+    (void)arg;
+
+    int c = mul(1, 2);
+    CU_ASSERT(c == 2);
+
+    c = mul(100, 200);
+    CU_ASSERT(c == 20000);
+
+    crt_exit(NULL);
+}
+
+void
+test_call_in_coroutine(void)
+{
+    CU_ASSERT(crt_create(NULL, NULL, call_in_coroutine, NULL) == 0);
+    usleep(1000*10);
+    CU_ASSERT(coroutine_env.info.ran == 2);
 }
 
 int
@@ -156,6 +183,13 @@ check_coroutine(void)
 
     /* {{{ CU_add_test: test_null_coroutine */
     if (CU_add_test(pSuite, "test_null_coroutine", test_null_coroutine) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_call_in_coroutine */
+    if (CU_add_test(pSuite, "test_call_in_coroutine", test_call_in_coroutine) == NULL)
     {
         CU_cleanup_registry();
         return CU_get_error();

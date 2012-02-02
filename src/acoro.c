@@ -167,11 +167,8 @@ loop:
                         task_ptr->args.init_arg.func_arg);
             coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
             swapcontext(&coroutine_env.manager_context, &task_context);
-
             if (task_ptr->action == act_finished_coroutine)
-            {
                 goto loop;
-            }
 
             break;
 
@@ -262,7 +259,10 @@ crt_create(coroutine_t *cid, const void * __restrict attr __attribute__((unused)
     /*TODO user can define stack size */
     list_item_new(task_queue, task_ptr);
 
-    *cid = __sync_add_and_fetch(&coroutine_env.info.cid, 1);
+    if (cid == NULL)
+        (void)__sync_add_and_fetch(&coroutine_env.info.cid, 1);
+    else
+        *cid = __sync_add_and_fetch(&coroutine_env.info.cid, 1);
 
     task_ptr->action = act_new_coroutine;
     task_ptr->args.init_arg.func = br;
