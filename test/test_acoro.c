@@ -41,6 +41,11 @@ struct coroutine_env_s
     sem_t manager_sem[MANAGER_CNT];
     int pipe_channel[BACKGROUND_WORKER_CNT * 2];
 
+    struct
+    {
+        volatile uint64_t cid;
+        volatile uint64_t ran; /* how many coroutine had been ran */
+    } info;
     ucontext_t manager_context;
 
     list_head_ptr(task_queue) timer_queue;
@@ -53,11 +58,13 @@ struct coroutine_env_s coroutine_env;
 
 /* }}} */
 
+int lowest_fd;
+
 void
 test_init_coroutine_env(void)
 {
     int ret;
-    int lowest_fd = dup(0);
+    lowest_fd = dup(0);
     close(lowest_fd);
 
     ret = init_coroutine_env();
@@ -72,13 +79,6 @@ test_init_coroutine_env(void)
     {
         CU_ASSERT(coroutine_env.pipe_channel[i] != 0);
     }
-
-    ret = destroy_coroutine_env();
-    CU_ASSERT(ret == 0);
-
-    int curr_lowest_fd = dup(0);
-    CU_ASSERT(lowest_fd == curr_lowest_fd);
-    close(curr_lowest_fd);
 }
 
 int
@@ -111,6 +111,35 @@ test_disk_read(void)
 
 }
 
+static void *
+null_coroutine(void *arg)
+{
+    CU_ASSERT((intptr_t)arg == 0xbeef);
+
+    return NULL;
+}
+
+void
+test_null_coroutine(void)
+{
+    coroutine_t cid;
+    int ret;
+
+    CU_ASSERT(coroutine_env.info.cid == 0);
+    CU_ASSERT(coroutine_env.info.ran == 0);
+
+    ret = coroutine_create(&cid, NULL, null_coroutine, (void*)(intptr_t)0xbeef);
+
+    CU_ASSERT(coroutine_env.info.cid == 1);
+    CU_ASSERT(cid == 1);
+
+    CU_ASSERT(ret == 0);
+
+    usleep(1000*10);
+
+    CU_ASSERT(coroutine_env.info.ran == 1);
+}
+
 int
 check_coroutine(void)
 {
@@ -118,6 +147,14 @@ check_coroutine(void)
     CU_pSuite pSuite = NULL;
     pSuite = CU_add_suite("check_coroutine", NULL, NULL);
     if (pSuite == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+
+    /* {{{ CU_add_test: test_null_coroutine */
+    if (CU_add_test(pSuite, "test_null_coroutine", test_null_coroutine) == NULL)
     {
         CU_cleanup_registry();
         return CU_get_error();
@@ -135,6 +172,42 @@ check_coroutine(void)
     return 0;
 }
 
+void
+test_destroy_coroutine_env(void)
+{
+    int ret;
+    ret = destroy_coroutine_env();
+    CU_ASSERT(ret == 0);
+
+    int curr_lowest_fd = dup(0);
+    CU_ASSERT(lowest_fd == curr_lowest_fd);
+    close(curr_lowest_fd);
+}
+
+int
+check_destroy_coroutine_env(void)
+{
+    /* {{{ init CU suite check_destroy_coroutine_env */
+    CU_pSuite pSuite = NULL;
+    pSuite = CU_add_suite("check_destroy_coroutine_env", NULL, NULL);
+    if (pSuite == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+
+    /* {{{ CU_add_test: test_destroy_coroutine_env */
+    if (CU_add_test(pSuite, "test_destroy_coroutine_env", test_destroy_coroutine_env) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+
+    return 0;
+}
+
 int
 main(void)
 {
@@ -143,8 +216,9 @@ main(void)
 
     check_init();
 
-    init_coroutine_env();
     check_coroutine();
+
+    check_destroy_coroutine_env();
 
     /* {{{ CU run & cleanup */
     CU_basic_set_mode(CU_BRM_VERBOSE);

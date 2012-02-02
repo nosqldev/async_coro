@@ -21,7 +21,7 @@
 #include "acoro.h"
 
 /* }}} */
-/* {{{ hooks */
+/* {{{ hooks & predefined subs */
 
 #ifndef acoro_malloc
 #define acoro_malloc malloc
@@ -30,6 +30,12 @@
 #ifndef acoro_free
 #define acoro_free free
 #endif /* ! acoro_free */
+
+#define Lock(name) list_lock(coroutine_env.name)
+#define UnLock(name) list_unlock(coroutine_env.name)
+
+#define Shift(name, ptr) do { Lock(name); list_shift(coroutine_env.name, ptr); UnLock(name); } while (0)
+#define Push(name, ptr) do { Lock(name); list_push(coroutine_env.name, ptr); UnLock(name); } while (0)
 
 /* }}} */
 /* {{{ config */
@@ -42,6 +48,10 @@
 #ifndef BACKGROUND_WORKER_CNT
 #define BACKGROUND_WORKER_CNT (2)
 #endif /* ! BACKGROUND_WORKER_CNT */
+
+#ifndef COROUTINE_STACK_SIZE
+#define COROUTINE_STACK_SIZE (4096)
+#endif /* ! COROUTINE_STACK_SIZE */
 
 /* }}} */
 /* {{{ enums & structures */
@@ -63,6 +73,13 @@ enum action_t
     act_usleep,
 };
 
+struct init_arg_s
+{
+    begin_routine_t func;
+    size_t stack_size;
+    void *func_arg;
+};
+
 struct io_arg_s
 {
     int fd;
@@ -73,13 +90,20 @@ struct io_arg_s
     int err_code;
 };
 
+union args_u
+{
+    struct init_arg_s init_arg;
+    struct io_arg_s io_arg;
+};
+
 list_def(task_queue);
 struct list_item_name(task_queue)
 {
     enum action_t action;
+    union args_u args;
 
-    struct io_arg_s io_arg;
     ucontext_t task_context;
+    void *stack_ptr;
 
     list_next_ptr(task_queue);
 };
@@ -92,6 +116,11 @@ struct coroutine_env_s
     sem_t manager_sem[MANAGER_CNT];
     int pipe_channel[BACKGROUND_WORKER_CNT * 2];
 
+    struct
+    {
+        volatile uint64_t cid;
+        volatile uint64_t ran; /* how many coroutine had been ran */
+    } info;
     ucontext_t manager_context;
 
     list_head_ptr(task_queue) timer_queue;
@@ -109,13 +138,39 @@ new_manager(void *arg)
 {
     int id;
     list_item_ptr(task_queue) task_ptr;
+    ucontext_t task_context;
 
     id = (intptr_t)arg;
 
-    for (; ;)
+    for ( ; ; )
     {
         sem_wait(&coroutine_env.manager_sem[id]);
-        list_pop(coroutine_env.todo_queue, task_ptr);
+        Shift(todo_queue, task_ptr);
+        if (task_ptr == NULL)
+            continue; /* should never reach here */
+
+        switch (task_ptr->action)
+        {
+        case act_new_coroutine:
+            getcontext(&coroutine_env.manager_context);
+            getcontext(&task_context);
+            task_ptr->stack_ptr = acoro_malloc(task_ptr->args.init_arg.stack_size);
+            task_context.uc_stack.ss_sp = task_ptr->stack_ptr;
+            task_context.uc_stack.ss_size = COROUTINE_STACK_SIZE;
+            task_context.uc_link = &coroutine_env.manager_context;
+            makecontext(&task_context,
+                        (void(*)(void))task_ptr->args.init_arg.func,
+                        1,
+                        task_ptr->args.init_arg.func_arg);
+            swapcontext(&coroutine_env.manager_context, &task_context);
+
+            __sync_add_and_fetch(&coroutine_env.info.ran, 1);
+            break;
+
+        default:
+            /* should never reach here */
+            break;
+        }
     }
 
     return NULL;
@@ -156,7 +211,6 @@ init_coroutine_env()
         pipe(&coroutine_env.pipe_channel[i*2]);
         pthread_create(&coroutine_env.background_worker_tid[i], NULL, new_background_worker, (void*)(intptr_t)i);
     }
-    getcontext(&coroutine_env.manager_context);
 
     return 0;
 }
@@ -177,6 +231,26 @@ destroy_coroutine_env()
         pthread_cancel(coroutine_env.background_worker_tid[i]);
     for (int i=0; i<BACKGROUND_WORKER_CNT*2; i++)
         close(coroutine_env.pipe_channel[i]);
+
+    return 0;
+}
+
+int
+coroutine_create(coroutine_t *cid, const void * __restrict attr __attribute__((unused)),
+                 begin_routine_t br, void * __restrict arg)
+{
+    /*TODO user can define stack size */
+    list_item_new(task_queue, task_ptr);
+
+    *cid = __sync_add_and_fetch(&coroutine_env.info.cid, 1);
+
+    task_ptr->action = act_new_coroutine;
+    task_ptr->args.init_arg.func = br;
+    task_ptr->args.init_arg.stack_size = COROUTINE_STACK_SIZE;
+    task_ptr->args.init_arg.func_arg = arg;
+
+    Push(todo_queue, task_ptr);
+    sem_post(&coroutine_env.manager_sem[0]); /* TODO post to one manager by round robin */
 
     return 0;
 }

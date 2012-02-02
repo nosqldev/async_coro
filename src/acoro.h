@@ -16,9 +16,8 @@
 #include <stdint.h>
 
 struct coroutine_env_s;
-typedef void (*ucontext_func_t)(void);
 typedef void *(*begin_routine_t)(void*);
-typedef uint32_t coroutine_t;
+typedef uint64_t coroutine_t;
 typedef struct
 {
     size_t stacksize;

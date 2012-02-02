@@ -77,8 +77,8 @@
 #define list_item_init(listname, item_ptr) \
     item_ptr = mem_alloc(sizeof(struct list_item_name(listname)));
 
-#define list_lock(head_ptr) do { pthread_mutex_lock(&(head_ptr->lock)); } while (0)
-#define list_unlock(head_ptr) do { pthread_mutex_unlock(&(head_ptr->lock)); } while (0)
+#define list_lock(head_ptr) do { pthread_mutex_lock(&((head_ptr)->lock)); } while (0)
+#define list_unlock(head_ptr) do { pthread_mutex_unlock(&((head_ptr)->lock)); } while (0)
 
 #define list_size(head_ptr) ((*(head_ptr)).size)
 
@@ -133,6 +133,7 @@
     while (list_first(head_ptr) != NULL)    {           \
         list_delete_head(head_ptr);                    \
     }                                                   \
+    pthread_mutex_destroy(&((head_ptr)->lock));         \
     mem_free(head_ptr);                                \
 } while (0)
 
