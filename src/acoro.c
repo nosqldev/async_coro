@@ -246,11 +246,12 @@ destroy_coroutine_env()
     return 0;
 }
 
-void
-coroutine_set_action_finished()
-{
-    coroutine_env.curr_task_ptr[ g_thread_id ]->action = act_finished_coroutine;
-}
+#define GenSetActionFunc(action_name)       \
+    void coroutine_set_##action_name() {    \
+        coroutine_env.curr_task_ptr[ g_thread_id ]->action = act_##action_name; \
+    }
+
+GenSetActionFunc(finished_coroutine);
 
 int
 crt_create(coroutine_t *cid, const void * __restrict attr __attribute__((unused)),

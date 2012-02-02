@@ -22,14 +22,14 @@ typedef struct
     size_t stacksize;
 } coroutine_attr_t;
 
-void coroutine_set_action_finished();
+void coroutine_set_finished_coroutine();
 
 int init_coroutine_env();
 int destroy_coroutine_env();
 int crt_create(coroutine_t *cid, const void * __restrict attr, begin_routine_t br, void * __restrict arg);
 /* {{{ void crt_exit(void *) */
 #define crt_exit(value_ptr) do {        \
-    coroutine_set_action_finished();    \
+    coroutine_set_finished_coroutine(); \
     return NULL;                        \
 } while(0)
 /* }}} */
