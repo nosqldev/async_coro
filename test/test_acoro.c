@@ -128,7 +128,7 @@ test_null_coroutine(void)
     CU_ASSERT(coroutine_env.info.cid == 0);
     CU_ASSERT(coroutine_env.info.ran == 0);
 
-    ret = coroutine_create(&cid, NULL, null_coroutine, (void*)(intptr_t)0xbeef);
+    ret = crt_create(&cid, NULL, null_coroutine, (void*)(intptr_t)0xbeef);
 
     CU_ASSERT(coroutine_env.info.cid == 1);
     CU_ASSERT(cid == 1);

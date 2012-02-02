@@ -25,7 +25,7 @@ typedef struct
 
 int init_coroutine_env();
 int destroy_coroutine_env();
-int coroutine_create(coroutine_t *cid, const void * __restrict attr, begin_routine_t br, void * __restrict arg);
+int crt_create(coroutine_t *cid, const void * __restrict attr, begin_routine_t br, void * __restrict arg);
 
 #endif /* ! _ACORO_H_ */
 /* vim: set expandtab tabstop=4 shiftwidth=4 foldmethod=marker: */

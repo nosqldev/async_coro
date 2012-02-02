@@ -236,7 +236,7 @@ destroy_coroutine_env()
 }
 
 int
-coroutine_create(coroutine_t *cid, const void * __restrict attr __attribute__((unused)),
+crt_create(coroutine_t *cid, const void * __restrict attr __attribute__((unused)),
                  begin_routine_t br, void * __restrict arg)
 {
     /*TODO user can define stack size */
