@@ -33,6 +33,72 @@
 #define BACKGROUND_WORKER_CNT (2)
 #endif /* ! BACKGROUND_WORKER_CNT */
 
+#define Lock(name) list_lock(coroutine_env.name)
+#define UnLock(name) list_unlock(coroutine_env.name)
+
+/* {{{ enums & structures */
+
+enum action_t
+{
+    act_new_coroutine,
+    act_finished_coroutine,
+
+    act_disk_open,
+    act_disk_read,
+    act_disk_write,
+    act_disk_close,
+
+    act_sock_read,
+    act_sock_write,
+
+    act_disk_read_done,
+
+    act_usleep,
+};
+
+struct init_arg_s
+{
+    begin_routine_t func;
+    size_t stack_size;
+    void *func_arg;
+};
+
+struct open_arg_s
+{
+    const char *pathname;
+    int flags;
+    mode_t mode;
+};
+
+struct io_arg_s
+{
+    int fd;
+    void *buf;
+    size_t count;
+
+    int ret;
+    int err_code;
+};
+
+union args_u
+{
+    struct init_arg_s init_arg;
+    struct open_arg_s open_arg;
+    struct io_arg_s io_arg;
+};
+
+list_def(task_queue);
+struct list_item_name(task_queue)
+{
+    enum action_t action;
+    union args_u args;
+
+    ucontext_t task_context;
+    void *stack_ptr;
+
+    list_next_ptr(task_queue);
+};
+
 struct coroutine_env_s
 {
     pthread_t manager_tid[MANAGER_CNT];
@@ -54,6 +120,8 @@ struct coroutine_env_s
     list_head_ptr(task_queue) doing_queue;
     list_head_ptr(task_queue) done_queue;
 };
+
+/* }}} */
 
 struct coroutine_env_s coroutine_env;
 
@@ -106,10 +174,34 @@ check_init(void)
     return 0;
 }
 
+static void *
+disk_read(void *arg)
+{
+    (void)arg;
+    int fd = 0;
+
+    Lock(doing_queue);
+    CU_ASSERT(list_size(coroutine_env.doing_queue) == 0);
+    UnLock(doing_queue);
+
+    fd = crt_disk_open("./test_acoro.c", O_RDONLY);
+
+    Lock(doing_queue);
+    CU_ASSERT(list_size(coroutine_env.doing_queue) == 1);
+    UnLock(doing_queue);
+
+    crt_exit(NULL);
+}
+
 void
 test_disk_read(void)
 {
+    int ret;
+    ret = crt_create(NULL, NULL, disk_read, NULL);
+    CU_ASSERT(ret == 0);
 
+    usleep(1000*10);
+    /*CU_ASSERT(coroutine_env.info.ran == 3);*/
 }
 
 static void *
@@ -195,7 +287,6 @@ check_coroutine(void)
         return CU_get_error();
     }
     /* }}} */
-
     /* {{{ CU_add_test: test_disk_read */
     if (CU_add_test(pSuite, "test_disk_read", test_disk_read) == NULL)
     {

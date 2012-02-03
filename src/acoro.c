@@ -12,13 +12,13 @@
 /* {{{ include header files */
 
 #include <string.h>
-#include <ucontext.h>
 #include <assert.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <fcntl.h>
 
-#include "bsdqueue.h"
 #include "acoro.h"
+#include "bsdqueue.h"
 
 /* }}} */
 /* {{{ hooks & predefined subs */
@@ -81,6 +81,13 @@ struct init_arg_s
     void *func_arg;
 };
 
+struct open_arg_s
+{
+    const char *pathname;
+    int flags;
+    mode_t mode;
+};
+
 struct io_arg_s
 {
     int fd;
@@ -94,6 +101,7 @@ struct io_arg_s
 union args_u
 {
     struct init_arg_s init_arg;
+    struct open_arg_s open_arg;
     struct io_arg_s io_arg;
 };
 
@@ -252,6 +260,42 @@ destroy_coroutine_env()
     }
 
 GenSetActionFunc(finished_coroutine);
+
+void
+coroutine_set_disk_open(const char *pathname, int flags, ...)
+{
+    va_list ap;
+    list_item_ptr(task_queue) task_ptr;
+
+    task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
+    task_ptr->action = act_disk_open;
+    task_ptr->args.open_arg.pathname = pathname;
+    task_ptr->args.open_arg.flags = flags;
+    if (flags | O_CREAT)
+    {
+        va_start(ap, flags);
+        task_ptr->args.open_arg.mode = va_arg(ap, mode_t);
+        va_end(ap);
+    }
+    else
+    {
+        task_ptr->args.open_arg.mode = 0;
+    }
+}
+
+void
+coroutine_notify_background_worker(void)
+{
+    /* TODO use pipe_channel to notify background worker thread */
+    Push(doing_queue, coroutine_env.curr_task_ptr[ g_thread_id ]);
+}
+
+void
+coroutine_get_context(ucontext_t **manager_context, ucontext_t **task_context)
+{
+    *manager_context = &coroutine_env.manager_context;
+    *task_context = &(coroutine_env.curr_task_ptr[ g_thread_id ]->task_context);
+}
 
 int
 crt_create(coroutine_t *cid, const void * __restrict attr __attribute__((unused)),
