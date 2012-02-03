@@ -86,6 +86,9 @@ struct open_arg_s
     const char *pathname;
     int flags;
     mode_t mode;
+
+    int retval;
+    int err_code;
 };
 
 struct io_arg_s
@@ -94,7 +97,7 @@ struct io_arg_s
     void *buf;
     size_t count;
 
-    int ret;
+    int retval;
     int err_code;
 };
 
@@ -258,8 +261,13 @@ destroy_coroutine_env()
     void coroutine_set_##action_name() {    \
         coroutine_env.curr_task_ptr[ g_thread_id ]->action = act_##action_name; \
     }
-
 GenSetActionFunc(finished_coroutine);
+
+#define GenGetRetvalFunc(action_name, arg_name)         \
+    int coroutine_get_##action_name##_retval() {        \
+        return coroutine_env.curr_task_ptr[ g_thread_id ]->args.arg_name.retval;    \
+    }
+GenGetRetvalFunc(disk_open, open_arg);
 
 void
 coroutine_set_disk_open(const char *pathname, int flags, ...)
