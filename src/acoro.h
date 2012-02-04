@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <ucontext.h>
+#include <errno.h>
 
 typedef void *(*begin_routine_t)(void*);
 typedef uint64_t coroutine_t;
@@ -29,11 +30,13 @@ void coroutine_get_context(ucontext_t **manager_context, ucontext_t **task_conte
 
 void coroutine_set_finished_coroutine();
 void coroutine_set_disk_open(const char *pathname, int flags, ...);
-int  coroutine_get_disk_open_retval();
+int  coroutine_get_retval();
 
 int init_coroutine_env();
 int destroy_coroutine_env();
 int crt_create(coroutine_t *cid, const void * restrict attr, begin_routine_t br, void * restrict arg);
+
+int crt_get_err_code();
 /* {{{ void crt_exit(void *) */
 
 #define crt_exit(value_ptr) do {        \
@@ -50,7 +53,7 @@ int crt_create(coroutine_t *cid, const void * restrict attr, begin_routine_t br,
     ucontext_t *manager_context, *task_context;                 \
     coroutine_get_context(&manager_context, &task_context);     \
     swapcontext(task_context, manager_context);                 \
-    int retval = coroutine_get_disk_open_retval();              \
+    int retval = coroutine_get_retval();                        \
     retval;                                                     \
 })
 

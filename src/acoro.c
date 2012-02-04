@@ -16,9 +16,11 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <fcntl.h>
+#include <sched.h>
 
 #include "acoro.h"
 #include "bsdqueue.h"
+#include "ev.h"
 
 /* }}} */
 /* {{{ hooks & predefined subs */
@@ -40,6 +42,8 @@
 /* }}} */
 /* {{{ config */
 
+/* TODO define MAX_* instead */
+
 #ifndef MANAGER_CNT
 /* ONLY 1 manager thread now */
 #define MANAGER_CNT (1)
@@ -50,7 +54,7 @@
 #endif /* ! BACKGROUND_WORKER_CNT */
 
 #ifndef COROUTINE_STACK_SIZE
-#define COROUTINE_STACK_SIZE (4096)
+#define COROUTINE_STACK_SIZE (1024 * 4)
 #endif /* ! COROUTINE_STACK_SIZE */
 
 /* }}} */
@@ -69,6 +73,7 @@ enum action_t
     act_sock_read,
     act_sock_write,
 
+    act_disk_open_done,
     act_disk_read_done,
 
     act_usleep,
@@ -86,9 +91,6 @@ struct open_arg_s
     const char *pathname;
     int flags;
     mode_t mode;
-
-    int retval;
-    int err_code;
 };
 
 struct io_arg_s
@@ -96,9 +98,6 @@ struct io_arg_s
     int fd;
     void *buf;
     size_t count;
-
-    int retval;
-    int err_code;
 };
 
 union args_u
@@ -113,6 +112,11 @@ struct list_item_name(task_queue)
 {
     enum action_t action;
     union args_u args;
+    struct
+    {
+        ssize_t val;
+        int err_code;
+    } ret;
 
     ucontext_t task_context;
     void *stack_ptr;
@@ -130,11 +134,19 @@ struct coroutine_env_s
 
     struct
     {
-        volatile uint64_t cid;
+        volatile uint64_t cid; /* coroutine id */
         volatile uint64_t ran; /* how many coroutines had been ran */
+        volatile uint64_t bg_worker_id;
     } info;
+
+    /* TODO manager_context should be an array */
     ucontext_t manager_context;
     list_item_ptr(task_queue) curr_task_ptr[MANAGER_CNT];
+    struct
+    {
+        struct ev_loop *loop;
+        ev_io watcher;
+    } worker_ev[BACKGROUND_WORKER_CNT];
 
     list_head_ptr(task_queue) timer_queue;
     list_head_ptr(task_queue) todo_queue;
@@ -180,7 +192,12 @@ loop:
             swapcontext(&coroutine_env.manager_context, &task_context);
             if (task_ptr->action == act_finished_coroutine)
                 goto loop;
+            break;
 
+        case act_disk_open_done:
+            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
+            if (task_ptr->action == act_finished_coroutine)
+                goto loop;
             break;
 
         case act_finished_coroutine:
@@ -198,13 +215,87 @@ loop:
     return NULL;
 }
 
+#define CurrLoop (coroutine_env.worker_ev[ g_thread_id ].loop)
+#define CurrWatcher (coroutine_env.worker_ev[ g_thread_id ].watcher)
+#define CurrReadPipe (coroutine_env.pipe_channel[g_thread_id * 2])
+
+static int
+do_disk_open(list_item_ptr(task_queue) task_ptr)
+{
+    struct open_arg_s *arg;
+
+    arg = &task_ptr->args.open_arg;
+    if (arg->flags | O_CREAT)
+        task_ptr->ret.val = open(arg->pathname, arg->flags, arg->mode);
+    else
+        task_ptr->ret.val = open(arg->pathname, arg->flags);
+
+    if (task_ptr->ret.val >= 0)
+        task_ptr->ret.err_code = 0;
+    else
+        task_ptr->ret.err_code = errno;
+    task_ptr->action = act_disk_open_done;
+
+    return 0;
+}
+
+static void
+do_task(list_item_ptr(task_queue) task_ptr)
+{
+    switch (task_ptr->action)
+    {
+    case act_disk_open:
+        do_disk_open(task_ptr);
+        break;
+
+    default:
+        abort();
+        break;
+    }
+}
+
+static void
+new_event_handler(struct ev_loop *loop, ev_io *w, int event)
+{
+    ssize_t nread;
+    unsigned char c;
+    list_item_ptr(task_queue) task_ptr;
+    uint64_t cid;
+
+    (void)loop;
+    (void)w;
+
+    if (event == EV_READ)
+    {
+        nread = read(CurrReadPipe, &c, sizeof c);
+        assert(nread == sizeof c);
+        assert(c == 0xee);
+        Shift(doing_queue, task_ptr);
+        assert(task_ptr != NULL);
+
+        do_task(task_ptr);
+        Push(todo_queue, task_ptr);
+        cid = __sync_fetch_and_add(&coroutine_env.info.cid, 0);
+        sem_post(&coroutine_env.manager_sem[ cid % MANAGER_CNT ]);
+    }
+    else
+    {
+        abort();
+    }
+}
+
 static void *
 new_background_worker(void *arg)
 {
-    int id;
+    g_thread_id = (intptr_t)arg;
 
-    id = (intptr_t)arg;
-    sleep(1);
+    CurrLoop = ev_loop_new(EVBACKEND_EPOLL);
+    assert(CurrLoop != NULL);
+
+    ev_io_init(&CurrWatcher, new_event_handler, CurrReadPipe, EV_READ);
+    ev_io_start(CurrLoop, &coroutine_env.worker_ev[ g_thread_id ].watcher);
+
+    ev_run(CurrLoop, 0);
 
     return NULL;
 }
@@ -212,6 +303,9 @@ new_background_worker(void *arg)
 int
 init_coroutine_env()
 {
+    int ret;
+    int flag;
+
     memset(&coroutine_env, 0, sizeof coroutine_env);
 
     list_new(task_queue, timer_queue);
@@ -227,11 +321,23 @@ init_coroutine_env()
     {
         sem_init(&coroutine_env.manager_sem[i], 0, 0);
         pthread_create(&coroutine_env.manager_tid[i], NULL, new_manager, (void*)(intptr_t)i);
+        sched_yield();
     }
     for (int i=0; i<BACKGROUND_WORKER_CNT; i++)
     {
         pipe(&coroutine_env.pipe_channel[i*2]);
+
+        flag = fcntl(coroutine_env.pipe_channel[i*2], F_GETFL);
+        assert(flag >= 0);
+        ret = fcntl(coroutine_env.pipe_channel[i*2], F_SETFL, flag | O_NONBLOCK);
+        assert(ret == 0);
+        flag = fcntl(coroutine_env.pipe_channel[i*2+1], F_GETFL);
+        assert(flag >= 0);
+        ret = fcntl(coroutine_env.pipe_channel[i*2+1], F_SETFL, flag | O_NONBLOCK);
+        assert(ret == 0);
+
         pthread_create(&coroutine_env.background_worker_tid[i], NULL, new_background_worker, (void*)(intptr_t)i);
+        sched_yield();
     }
 
     return 0;
@@ -263,11 +369,17 @@ destroy_coroutine_env()
     }
 GenSetActionFunc(finished_coroutine);
 
-#define GenGetRetvalFunc(action_name, arg_name)         \
-    int coroutine_get_##action_name##_retval() {        \
-        return coroutine_env.curr_task_ptr[ g_thread_id ]->args.arg_name.retval;    \
-    }
-GenGetRetvalFunc(disk_open, open_arg);
+int
+coroutine_get_retval()
+{
+    return coroutine_env.curr_task_ptr[ g_thread_id ]->ret.val;
+}
+
+int
+crt_get_err_code()
+{
+    return coroutine_env.curr_task_ptr[ g_thread_id ]->ret.err_code;
+}
 
 void
 coroutine_set_disk_open(const char *pathname, int flags, ...)
@@ -294,8 +406,15 @@ coroutine_set_disk_open(const char *pathname, int flags, ...)
 void
 coroutine_notify_background_worker(void)
 {
-    /* TODO use pipe_channel to notify background worker thread */
+    unsigned char c;
+    ssize_t nwrite;
+    uint64_t bg_worker_id;
+
+    c = 0xee;
     Push(doing_queue, coroutine_env.curr_task_ptr[ g_thread_id ]);
+    bg_worker_id = __sync_fetch_and_add(&coroutine_env.info.bg_worker_id, 1) % BACKGROUND_WORKER_CNT;
+    nwrite = write(coroutine_env.pipe_channel[bg_worker_id * 2 + 1], &c, sizeof c);
+    assert(nwrite == sizeof c);
 }
 
 void

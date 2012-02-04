@@ -23,9 +23,19 @@
 #include <assert.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include "ev.h"
 #include "bsdqueue.h"
 
+
+#define Lock(name) list_lock(coroutine_env.name)
+#define UnLock(name) list_unlock(coroutine_env.name)
+
+/* {{{ config */
+
+/* TODO define MAX_* instead */
+
 #ifndef MANAGER_CNT
+/* ONLY 1 manager thread now */
 #define MANAGER_CNT (1)
 #endif /* ! MANAGER_CNT */
 
@@ -33,9 +43,11 @@
 #define BACKGROUND_WORKER_CNT (2)
 #endif /* ! BACKGROUND_WORKER_CNT */
 
-#define Lock(name) list_lock(coroutine_env.name)
-#define UnLock(name) list_unlock(coroutine_env.name)
+#ifndef COROUTINE_STACK_SIZE
+#define COROUTINE_STACK_SIZE (1024 * 4)
+#endif /* ! COROUTINE_STACK_SIZE */
 
+/* }}} */
 /* {{{ enums & structures */
 
 enum action_t
@@ -51,6 +63,7 @@ enum action_t
     act_sock_read,
     act_sock_write,
 
+    act_disk_open_done,
     act_disk_read_done,
 
     act_usleep,
@@ -75,9 +88,6 @@ struct io_arg_s
     int fd;
     void *buf;
     size_t count;
-
-    int ret;
-    int err_code;
 };
 
 union args_u
@@ -92,6 +102,11 @@ struct list_item_name(task_queue)
 {
     enum action_t action;
     union args_u args;
+    struct
+    {
+        ssize_t val;
+        int err_code;
+    } ret;
 
     ucontext_t task_context;
     void *stack_ptr;
@@ -109,11 +124,19 @@ struct coroutine_env_s
 
     struct
     {
-        volatile uint64_t cid;
+        volatile uint64_t cid; /* coroutine id */
         volatile uint64_t ran; /* how many coroutines had been ran */
+        volatile uint64_t bg_worker_id;
     } info;
+
+    /* TODO manager_context should be an array */
     ucontext_t manager_context;
     list_item_ptr(task_queue) curr_task_ptr[MANAGER_CNT];
+    struct
+    {
+        struct ev_loop *loop;
+        ev_io watcher;
+    } worker_ev[BACKGROUND_WORKER_CNT];
 
     list_head_ptr(task_queue) timer_queue;
     list_head_ptr(task_queue) todo_queue;
@@ -123,6 +146,7 @@ struct coroutine_env_s
 
 /* }}} */
 
+extern __thread volatile uint64_t g_thread_id;
 struct coroutine_env_s coroutine_env;
 
 /* }}} */
@@ -185,10 +209,7 @@ disk_read(void *arg)
     UnLock(doing_queue);
 
     fd = crt_disk_open("./test_acoro.c", O_RDONLY);
-
-    Lock(doing_queue);
-    CU_ASSERT(list_size(coroutine_env.doing_queue) == 1);
-    UnLock(doing_queue);
+    CU_ASSERT(fd > 0);
 
     crt_exit(NULL);
 }
@@ -197,16 +218,19 @@ void
 test_disk_read(void)
 {
     int ret;
+    CU_ASSERT(coroutine_env.info.ran == 2);
     ret = crt_create(NULL, NULL, disk_read, NULL);
     CU_ASSERT(ret == 0);
 
-    usleep(1000*10);
-    /*CU_ASSERT(coroutine_env.info.ran == 3);*/
+    usleep(1000*20);
+    CU_ASSERT(coroutine_env.info.ran == 3);
 }
 
 static void *
 null_coroutine(void *arg)
 {
+    /* XXX Why crash when using printf() with arguments? */
+    /*printf("hello, %s\n", "world");*/
     CU_ASSERT((intptr_t)arg == 0xbeef);
 
     crt_exit(NULL);
@@ -235,6 +259,12 @@ test_null_coroutine(void)
 static int
 mul(int a, int b)
 {
+    CU_ASSERT((uintptr_t)&a > (uintptr_t)coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr);
+    CU_ASSERT((uintptr_t)&a < (uintptr_t)coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr + (uintptr_t)COROUTINE_STACK_SIZE);
+
+    CU_ASSERT((uintptr_t)&b > (uintptr_t)coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr);
+    CU_ASSERT((uintptr_t)&b < (uintptr_t)coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr + (uintptr_t)COROUTINE_STACK_SIZE);
+
     return a * b;
 }
 
@@ -245,6 +275,8 @@ call_in_coroutine(void *arg)
 
     int c = mul(1, 2);
     CU_ASSERT(c == 2);
+    CU_ASSERT((uintptr_t)&c > (uintptr_t)coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr);
+    CU_ASSERT((uintptr_t)&c < (uintptr_t)coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr + (uintptr_t)COROUTINE_STACK_SIZE);
 
     c = mul(100, 200);
     CU_ASSERT(c == 20000);
