@@ -1,11 +1,11 @@
 Background
 ----------
-In synchronous programming model, we can create a new thread to handle a new requests, because the running thread will be blocked when it's processing some slow calls(such as read(2), write(2)), the overhead is unacceptable if we have thousands of connections because OS have to schedule them and the context switches are pretty expensive.
+In synchronous programming model, we can create a new thread to handle a new request, the running thread will be blocked when it's processing some slow calls(such as read(2), write(2)), the overhead is unacceptable if we have thousands of connections because OS have to schedule them and the context switches are pretty expensive.
 
-An alternative way of handling such huge number of connections in Linux/FreeBSD is to use epoll(2)/kqueue(2), or libevent/libev for portable application, however, even these third library encapsulated interfaces and easy to use, it's still harder than synchronous IO, you have to control the status switches by yourself, it's not a comfortable thing when you have to parse some complex networking protocol.
+An alternative way of handling such huge number of connections in Linux/FreeBSD is to use epoll(2)/kqueue(2), or libevent/libev for portable application, however, even these third library encapsulated interfaces and easy to use, it's still harder than synchronous IO, you have to control the status and switch by yourself, e.g.: it's not a comfortable thing when you have to parse some complex networking protocol.
 
 Introduction
 ------------
-This library is try to encapsulate new APIs so that you can create coroutines as pthread, write readable/intelligible code, much easier to port old pthread related code to less thread application, and more important, for high performance.
+This library try to encapsulate new APIs so that you can create coroutines as pthread, write readable/intelligible code, easy to port old pthread related code to thread-less application, and what's more important: high performance.
 
-This library provides coroutine management and a series of IO functions to make you write code easily.
+This library provides coroutine management and a series of IO functions to make you write code easily, context will be switched while executing these slow IO functions.
