@@ -68,7 +68,6 @@ enum action_t
     act_disk_open,
     act_disk_read,
     act_disk_write,
-    act_disk_close,
 
     act_sock_read,
     act_sock_write,
@@ -200,6 +199,12 @@ loop:
                 goto loop;
             break;
 
+        case act_disk_read_done:
+            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
+            if (task_ptr->action == act_finished_coroutine)
+                goto loop;
+            break;
+
         case act_finished_coroutine:
             acoro_free(coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr);
             acoro_free(coroutine_env.curr_task_ptr[ g_thread_id ]);
@@ -208,6 +213,7 @@ loop:
 
         default:
             /* should never reach here */
+            abort();
             break;
         }
     }
@@ -239,6 +245,22 @@ do_disk_open(list_item_ptr(task_queue) task_ptr)
     return 0;
 }
 
+static int
+do_disk_read(list_item_ptr(task_queue) task_ptr)
+{
+    struct io_arg_s *arg;
+
+    arg = &task_ptr->args.io_arg;
+    task_ptr->ret.val = read(arg->fd, arg->buf, arg->count);
+    if (task_ptr->ret.val == 0)
+        task_ptr->ret.err_code = 0;
+    else
+        task_ptr->ret.err_code = errno;
+    task_ptr->action = act_disk_read_done;
+
+    return 0;
+}
+
 static void
 do_task(list_item_ptr(task_queue) task_ptr)
 {
@@ -246,6 +268,10 @@ do_task(list_item_ptr(task_queue) task_ptr)
     {
     case act_disk_open:
         do_disk_open(task_ptr);
+        break;
+
+    case act_disk_read:
+        do_disk_read(task_ptr);
         break;
 
     default:
@@ -401,6 +427,18 @@ coroutine_set_disk_open(const char *pathname, int flags, ...)
     {
         task_ptr->args.open_arg.mode = 0;
     }
+}
+
+void
+coroutine_set_disk_read(int fd, void *buf, size_t count)
+{
+    list_item_ptr(task_queue) task_ptr;
+
+    task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
+    task_ptr->action = act_disk_read;
+    task_ptr->args.io_arg.fd    = fd;
+    task_ptr->args.io_arg.buf   = buf;
+    task_ptr->args.io_arg.count = count;
 }
 
 void

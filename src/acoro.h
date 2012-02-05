@@ -30,6 +30,7 @@ void coroutine_get_context(ucontext_t **manager_context, ucontext_t **task_conte
 
 void coroutine_set_finished_coroutine();
 void coroutine_set_disk_open(const char *pathname, int flags, ...);
+void coroutine_set_disk_read(int fd, void *buf, size_t count);
 int  coroutine_get_retval();
 
 int init_coroutine_env();
@@ -47,6 +48,8 @@ int crt_get_err_code();
 /* }}} */
 /* {{{ int crt_disk_open(const char *, int, ...) */
 
+/* Actually, open(2) is a slow call, might be block while disk addressing or io
+ * queue is full, etc. */
 #define crt_disk_open(pathname, flags, ...) ({                  \
     coroutine_set_disk_open(pathname, flags, ##__VA_ARGS__);    \
     coroutine_notify_background_worker();                       \
@@ -54,6 +57,28 @@ int crt_get_err_code();
     coroutine_get_context(&manager_context, &task_context);     \
     swapcontext(task_context, manager_context);                 \
     int retval = coroutine_get_retval();                        \
+    retval;                                                     \
+})
+
+/* }}} */
+/* {{{ ssize_t crt_disk_read(int fd, void *buf, size_t count) */
+
+#define crt_disk_read(fd, buf, count) ({                        \
+    coroutine_set_disk_read(fd, buf, count);                    \
+    coroutine_notify_background_worker();                       \
+    ucontext_t *manager_context, *task_context;                 \
+    coroutine_get_context(&manager_context, &task_context);     \
+    swapcontext(task_context, manager_context);                 \
+    int retval = coroutine_get_retval();                        \
+    retval;                                                     \
+})
+
+/* }}} */
+/* {{{ int crt_disk_close(int fd) */
+
+/* This is not a slow call, so we can call close(2) directly */
+#define crt_disk_close(fd) ({                                   \
+    int retval = close(fd);                                     \
     retval;                                                     \
 })
 

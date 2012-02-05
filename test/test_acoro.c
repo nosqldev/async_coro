@@ -203,6 +203,7 @@ disk_read(void *arg)
 {
     (void)arg;
     int fd = 0;
+    char buf[32];
 
     Lock(doing_queue);
     CU_ASSERT(list_size(coroutine_env.doing_queue) == 0);
@@ -210,6 +211,17 @@ disk_read(void *arg)
 
     fd = crt_disk_open("./test_acoro.c", O_RDONLY);
     CU_ASSERT(fd > 0);
+    ssize_t nread = crt_disk_read(fd, buf, sizeof buf);
+    CU_ASSERT(nread == sizeof buf);
+    CU_ASSERT(memcmp(buf, "/* © Copyright 2012 jingmi. All", sizeof buf) == 0);
+
+    int ret = crt_disk_close(fd);
+    CU_ASSERT(ret == 0);
+
+    CU_ASSERT((uintptr_t)&buf[0] > (uintptr_t)coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr);
+    CU_ASSERT((uintptr_t)&buf[0] < (uintptr_t)coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr + (uintptr_t)COROUTINE_STACK_SIZE);
+    CU_ASSERT((uintptr_t)&buf[31] > (uintptr_t)coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr);
+    CU_ASSERT((uintptr_t)&buf[31] < (uintptr_t)coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr + (uintptr_t)COROUTINE_STACK_SIZE);
 
     crt_exit(NULL);
 }
@@ -218,12 +230,16 @@ void
 test_disk_read(void)
 {
     int ret;
+    int lowestfd = dup(0);
+    close(lowestfd);
     CU_ASSERT(coroutine_env.info.ran == 2);
     ret = crt_create(NULL, NULL, disk_read, NULL);
     CU_ASSERT(ret == 0);
 
     usleep(1000*20);
     CU_ASSERT(coroutine_env.info.ran == 3);
+    int curr_lowestfd = dup(0);
+    CU_ASSERT(lowestfd == curr_lowestfd);
 }
 
 static void *
