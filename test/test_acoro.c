@@ -212,6 +212,7 @@ disk_read(void *arg)
     fd = crt_disk_open("./test_acoro.c", O_RDONLY);
     CU_ASSERT(fd > 0);
     ssize_t nread = crt_disk_read(fd, buf, sizeof buf);
+    CU_ASSERT(crt_get_err_code() == 0);
     CU_ASSERT(nread == sizeof buf);
     CU_ASSERT(memcmp(buf, "/* © Copyright 2012 jingmi. All", sizeof buf) == 0);
 
@@ -239,6 +240,7 @@ test_disk_read(void)
     usleep(1000*20);
     CU_ASSERT(coroutine_env.info.ran == 3);
     int curr_lowestfd = dup(0);
+    close(curr_lowestfd);
     CU_ASSERT(lowestfd == curr_lowestfd);
 }
 
@@ -308,6 +310,94 @@ test_call_in_coroutine(void)
     CU_ASSERT(coroutine_env.info.ran == 2);
 }
 
+static void *
+disk_write(void *arg)
+{
+    (void)arg;
+
+    int fd;
+
+    fd = crt_disk_open("/tmp/test_acoro.dat", O_WRONLY | O_CREAT | O_APPEND | O_TRUNC, S_IREAD | S_IWRITE);
+    CU_ASSERT(fd > 0);
+
+    ssize_t nwrite = crt_disk_write(fd, "abc", 3);
+    CU_ASSERT(nwrite == 3);
+    CU_ASSERT(crt_get_err_code() == 0);
+
+    CU_ASSERT(crt_disk_close(fd) == 0);
+
+    fd = open("/tmp/test_acoro.dat", O_RDONLY);
+    char buf[16];
+    ssize_t nread = read(fd, buf, sizeof buf);
+    CU_ASSERT(nread == 3);
+    CU_ASSERT(memcmp(buf, "abc", 3) == 0);
+    close(fd);
+    struct stat sb;
+    stat("/tmp/test_acoro.dat", &sb);
+    CU_ASSERT(sb.st_size == 3);
+
+    crt_exit(NULL);
+}
+
+void
+test_disk_write(void)
+{
+    int lowestfd = dup(0);
+    close(lowestfd);
+
+    CU_ASSERT(crt_create(NULL, NULL, disk_write, NULL) == 0);
+    usleep(1000 * 10);
+    CU_ASSERT(coroutine_env.info.ran == 4);
+
+    int curr_lowestfd = dup(0);
+    close(curr_lowestfd);
+    CU_ASSERT(lowestfd == curr_lowestfd);
+
+    assert(unlink("/tmp/test_acoro.dat") == 0);
+}
+
+void *
+disk_io_failed(void *arg)
+{
+    (void)arg;
+
+    int fd = crt_disk_open("/UnableOpened.dat", O_CREAT, S_IREAD | S_IWRITE);
+    CU_ASSERT(fd == -1);
+    int err_code = crt_get_err_code();
+    CU_ASSERT(err_code == EACCES);
+
+    fd = crt_disk_open("/tmp/test_acoro.dat", O_RDONLY | O_CREAT | O_APPEND | O_TRUNC, S_IREAD);
+    CU_ASSERT(fd > 0);
+    char buf[16] = "abcdefg";
+    ssize_t nwrite = crt_disk_write(fd, buf, sizeof buf);
+    CU_ASSERT(errno == 0); /* means we can NOT use system errno in coroutine */
+    CU_ASSERT(nwrite < 0);
+    err_code = crt_get_err_code();
+    CU_ASSERT(err_code == EBADF);
+
+    CU_ASSERT(crt_disk_close(fd) == 0);
+
+    crt_exit(NULL);
+}
+
+void
+test_disk_io_failed(void)
+{
+    int lowestfd = dup(0);
+    close(lowestfd);
+
+    coroutine_t cid;
+    CU_ASSERT(crt_create(&cid, NULL, disk_io_failed, NULL) == 0);
+    usleep(1000 * 10);
+    CU_ASSERT(coroutine_env.info.ran == 5);
+    CU_ASSERT(cid == 5);
+    assert(unlink("/tmp/test_acoro.dat") == 0);
+
+    int curr_lowestfd = dup(0);
+    close(curr_lowestfd);
+    CU_ASSERT(lowestfd == curr_lowestfd);
+}
+
 int
 check_coroutine(void)
 {
@@ -337,6 +427,20 @@ check_coroutine(void)
     /* }}} */
     /* {{{ CU_add_test: test_disk_read */
     if (CU_add_test(pSuite, "test_disk_read", test_disk_read) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_disk_write */
+    if (CU_add_test(pSuite, "test_disk_write", test_disk_write) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_disk_io_failed */
+    if (CU_add_test(pSuite, "test_disk_io_failed", test_disk_io_failed) == NULL)
     {
         CU_cleanup_registry();
         return CU_get_error();

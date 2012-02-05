@@ -31,6 +31,7 @@ void coroutine_get_context(ucontext_t **manager_context, ucontext_t **task_conte
 void coroutine_set_finished_coroutine();
 void coroutine_set_disk_open(const char *pathname, int flags, ...);
 void coroutine_set_disk_read(int fd, void *buf, size_t count);
+void coroutine_set_disk_write(int fd, void *buf, size_t count);
 int  coroutine_get_retval();
 
 int init_coroutine_env();
@@ -65,6 +66,19 @@ int crt_get_err_code();
 
 #define crt_disk_read(fd, buf, count) ({                        \
     coroutine_set_disk_read(fd, buf, count);                    \
+    coroutine_notify_background_worker();                       \
+    ucontext_t *manager_context, *task_context;                 \
+    coroutine_get_context(&manager_context, &task_context);     \
+    swapcontext(task_context, manager_context);                 \
+    int retval = coroutine_get_retval();                        \
+    retval;                                                     \
+})
+
+/* }}} */
+/* {{{ ssize_t crt_disk_write(int fd, const void *buf, size_t count) */
+
+#define crt_disk_write(fd, buf, count) ({                       \
+    coroutine_set_disk_write(fd, buf, count);                   \
     coroutine_notify_background_worker();                       \
     ucontext_t *manager_context, *task_context;                 \
     coroutine_get_context(&manager_context, &task_context);     \
