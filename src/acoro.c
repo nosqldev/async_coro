@@ -158,6 +158,8 @@ struct coroutine_env_s
 __thread volatile uint64_t g_thread_id;
 struct coroutine_env_s coroutine_env;
 
+/* {{{ manager thread */
+
 static void *
 new_manager(void *arg)
 {
@@ -220,6 +222,9 @@ loop:
 
     return NULL;
 }
+
+/* }}} */
+/* {{{ Background worker thread */
 
 #define CurrLoop (coroutine_env.worker_ev[ g_thread_id ].loop)
 #define CurrWatcher (coroutine_env.worker_ev[ g_thread_id ].watcher)
@@ -326,6 +331,79 @@ new_background_worker(void *arg)
     return NULL;
 }
 
+/* }}} */
+/* {{{ public functions but internal used only */
+
+#define GenSetActionFunc(action_name)       \
+    void coroutine_set_##action_name() {    \
+        coroutine_env.curr_task_ptr[ g_thread_id ]->action = act_##action_name; \
+    }
+GenSetActionFunc(finished_coroutine);
+
+int
+coroutine_get_retval()
+{
+    return coroutine_env.curr_task_ptr[ g_thread_id ]->ret.val;
+}
+
+void
+coroutine_set_disk_open(const char *pathname, int flags, ...)
+{
+    va_list ap;
+    list_item_ptr(task_queue) task_ptr;
+
+    task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
+    task_ptr->action = act_disk_open;
+    task_ptr->args.open_arg.pathname = pathname;
+    task_ptr->args.open_arg.flags = flags;
+    if (flags | O_CREAT)
+    {
+        va_start(ap, flags);
+        task_ptr->args.open_arg.mode = va_arg(ap, mode_t);
+        va_end(ap);
+    }
+    else
+    {
+        task_ptr->args.open_arg.mode = 0;
+    }
+}
+
+void
+coroutine_set_disk_read(int fd, void *buf, size_t count)
+{
+    list_item_ptr(task_queue) task_ptr;
+
+    task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
+    task_ptr->action = act_disk_read;
+    task_ptr->args.io_arg.fd    = fd;
+    task_ptr->args.io_arg.buf   = buf;
+    task_ptr->args.io_arg.count = count;
+}
+
+void
+coroutine_notify_background_worker(void)
+{
+    unsigned char c;
+    ssize_t nwrite;
+    uint64_t bg_worker_id;
+
+    c = 0xee;
+    Push(doing_queue, coroutine_env.curr_task_ptr[ g_thread_id ]);
+    bg_worker_id = __sync_fetch_and_add(&coroutine_env.info.bg_worker_id, 1) % BACKGROUND_WORKER_CNT;
+    nwrite = write(coroutine_env.pipe_channel[bg_worker_id * 2 + 1], &c, sizeof c);
+    assert(nwrite == sizeof c);
+}
+
+void
+coroutine_get_context(ucontext_t **manager_context, ucontext_t **task_context)
+{
+    *manager_context = &coroutine_env.manager_context;
+    *task_context = &(coroutine_env.curr_task_ptr[ g_thread_id ]->task_context);
+}
+
+/* }}} */
+/* {{{ public interfaces */
+
 int
 init_coroutine_env()
 {
@@ -389,77 +467,10 @@ destroy_coroutine_env()
     return 0;
 }
 
-#define GenSetActionFunc(action_name)       \
-    void coroutine_set_##action_name() {    \
-        coroutine_env.curr_task_ptr[ g_thread_id ]->action = act_##action_name; \
-    }
-GenSetActionFunc(finished_coroutine);
-
-int
-coroutine_get_retval()
-{
-    return coroutine_env.curr_task_ptr[ g_thread_id ]->ret.val;
-}
-
 int
 crt_get_err_code()
 {
     return coroutine_env.curr_task_ptr[ g_thread_id ]->ret.err_code;
-}
-
-void
-coroutine_set_disk_open(const char *pathname, int flags, ...)
-{
-    va_list ap;
-    list_item_ptr(task_queue) task_ptr;
-
-    task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
-    task_ptr->action = act_disk_open;
-    task_ptr->args.open_arg.pathname = pathname;
-    task_ptr->args.open_arg.flags = flags;
-    if (flags | O_CREAT)
-    {
-        va_start(ap, flags);
-        task_ptr->args.open_arg.mode = va_arg(ap, mode_t);
-        va_end(ap);
-    }
-    else
-    {
-        task_ptr->args.open_arg.mode = 0;
-    }
-}
-
-void
-coroutine_set_disk_read(int fd, void *buf, size_t count)
-{
-    list_item_ptr(task_queue) task_ptr;
-
-    task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
-    task_ptr->action = act_disk_read;
-    task_ptr->args.io_arg.fd    = fd;
-    task_ptr->args.io_arg.buf   = buf;
-    task_ptr->args.io_arg.count = count;
-}
-
-void
-coroutine_notify_background_worker(void)
-{
-    unsigned char c;
-    ssize_t nwrite;
-    uint64_t bg_worker_id;
-
-    c = 0xee;
-    Push(doing_queue, coroutine_env.curr_task_ptr[ g_thread_id ]);
-    bg_worker_id = __sync_fetch_and_add(&coroutine_env.info.bg_worker_id, 1) % BACKGROUND_WORKER_CNT;
-    nwrite = write(coroutine_env.pipe_channel[bg_worker_id * 2 + 1], &c, sizeof c);
-    assert(nwrite == sizeof c);
-}
-
-void
-coroutine_get_context(ucontext_t **manager_context, ucontext_t **task_context)
-{
-    *manager_context = &coroutine_env.manager_context;
-    *task_context = &(coroutine_env.curr_task_ptr[ g_thread_id ]->task_context);
 }
 
 int
@@ -484,5 +495,7 @@ crt_create(coroutine_t *cid, const void * __restrict attr __attribute__((unused)
 
     return 0;
 }
+
+/* }}} */
 
 /* vim: set expandtab tabstop=4 shiftwidth=4 foldmethod=marker: */
