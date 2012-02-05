@@ -231,7 +231,7 @@ loop:
 }
 
 /* }}} */
-/* {{{ Background worker thread */
+/* {{{ background worker thread */
 
 #define CurrLoop (coroutine_env.worker_ev[ g_thread_id ].loop)
 #define CurrWatcher (coroutine_env.worker_ev[ g_thread_id ].watcher)
@@ -534,6 +534,44 @@ crt_create(coroutine_t *cid, const void * __restrict attr __attribute__((unused)
 
     return 0;
 }
+
+int
+crt_set_nonblock(int fd)
+{
+    int flag;
+    int ret = 0;
+
+    if ((flag = fcntl(fd, F_GETFL)) < 0)
+    {
+        return errno;
+    }
+    if (fcntl(fd, F_SETFL, flag | O_NONBLOCK) < 0)
+    {
+        return errno;
+    }
+
+    return ret;
+}
+
+int
+crt_set_block(int fd)
+{
+    int flag;
+    int ret = 0;
+
+    if ((flag = fcntl(fd, F_GETFL)) < 0)
+    {
+        return errno;
+    }
+    flag = (flag & (~O_NONBLOCK));
+    if (fcntl(fd, F_SETFL, flag) < 0)
+    {
+        return errno;
+    }
+
+    return ret;
+}
+
 
 /* }}} */
 

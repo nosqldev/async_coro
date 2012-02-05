@@ -38,6 +38,8 @@ int init_coroutine_env();
 int destroy_coroutine_env();
 int crt_create(coroutine_t *cid, const void * restrict attr, begin_routine_t br, void * restrict arg);
 
+int crt_set_nonblock(int fd);
+int crt_set_block(int fd);
 int crt_get_err_code();
 /* {{{ void crt_exit(void *) */
 
