@@ -39,6 +39,8 @@
 #define Shift(name, ptr) do { Lock(name); list_shift(coroutine_env.name, ptr); UnLock(name); } while (0)
 #define Push(name, ptr) do { Lock(name); list_push(coroutine_env.name, ptr); UnLock(name); } while (0)
 
+#define IO_WATCHER_REF_TASKPTR(io_w_ptr) (list_item_ptr(task_queue))((char *)io_w_ptr - __offset_of(struct list_item_name(task_queue), ec.sock_watcher))
+
 /* }}} */
 /* {{{ config */
 
@@ -60,6 +62,10 @@
 /* }}} */
 /* {{{ enums & structures */
 
+/* TODO
+ * 1. rename *sock* to *tcp*
+ * 2. add tcp_connect
+ */
 enum action_t
 {
     act_new_coroutine,
@@ -70,11 +76,15 @@ enum action_t
     act_disk_write,
 
     act_sock_read,
+    act_sock_read_done,
     act_sock_write,
 
     act_disk_open_done,
     act_disk_read_done,
     act_disk_write_done,
+
+    act_tcp_connect,
+    act_tcp_done,
 
     act_usleep,
 };
@@ -95,6 +105,8 @@ struct open_arg_s
 
 struct io_arg_s
 {
+    int timeout_ms; /* for sock io only */
+
     int fd;
     void *buf;
     size_t count;
@@ -105,6 +117,14 @@ union args_u
     struct init_arg_s init_arg;
     struct open_arg_s open_arg;
     struct io_arg_s io_arg;
+};
+
+struct ev_controller_s
+{
+    ev_io sock_watcher;
+    ev_timer sock_timer;
+    ssize_t have_io;
+    ssize_t need_io;
 };
 
 list_def(task_queue);
@@ -120,6 +140,7 @@ struct list_item_name(task_queue)
 
     ucontext_t task_context;
     void *stack_ptr;
+    struct ev_controller_s ec;
 
     list_next_ptr(task_queue);
 };
@@ -214,6 +235,12 @@ loop:
                 goto loop;
             break;
 
+        case act_sock_read_done:
+            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
+            if (task_ptr->action == act_finished_coroutine)
+                goto loop;
+            break;
+
         case act_finished_coroutine:
             acoro_free(coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr);
             acoro_free(coroutine_env.curr_task_ptr[ g_thread_id ]);
@@ -236,6 +263,16 @@ loop:
 #define CurrLoop (coroutine_env.worker_ev[ g_thread_id ].loop)
 #define CurrWatcher (coroutine_env.worker_ev[ g_thread_id ].watcher)
 #define CurrReadPipe (coroutine_env.pipe_channel[g_thread_id * 2])
+
+static inline void
+coroutine_notify_manager(list_item_ptr(task_queue) task_ptr)
+{
+    uint64_t cid;
+
+    Push(todo_queue, task_ptr);
+    cid = __sync_fetch_and_add(&coroutine_env.info.cid, 0);
+    sem_post(&coroutine_env.manager_sem[ cid % MANAGER_CNT ]);
+}
 
 static int
 do_disk_open(list_item_ptr(task_queue) task_ptr)
@@ -289,27 +326,150 @@ do_disk_write(list_item_ptr(task_queue) task_ptr)
     return 0;
 }
 
+static int
+ev_sock_stop(list_item_ptr(task_queue) task_ptr, int retval, int err_code)
+{
+    ev_io_stop(CurrLoop, &task_ptr->ec.sock_watcher);
+    if (task_ptr->args.io_arg.timeout_ms != 0)
+        ev_timer_stop(CurrLoop, &task_ptr->ec.sock_timer);
+    task_ptr->ret.val = retval;
+    task_ptr->ret.err_code = err_code;
+    task_ptr->action = act_sock_read_done;
+
+    return 0;
+}
+
 static void
+ev_sock_timeout(struct ev_loop *loop, ev_timer *timer_w, int event)
+{
+    (void)loop;
+    (void)timer_w;
+    (void)event;
+}
+
+static void
+ev_sock_read(struct ev_loop *loop, ev_io *io_w, int event)
+{
+    list_item_ptr(task_queue) task_ptr;
+    struct io_arg_s *arg;
+    ssize_t io_bytes;
+    char *buf;
+
+    (void)loop;
+    (void)event;
+
+    assert(event == EV_READ);
+    task_ptr = IO_WATCHER_REF_TASKPTR(io_w);
+    arg = &task_ptr->args.io_arg;
+    assert(fcntl(arg->fd, F_GETFL) & O_NONBLOCK);
+    assert(task_ptr->action == act_sock_read);
+    buf = arg->buf;
+
+    if (task_ptr->ec.need_io == 0)
+    {
+        ev_sock_stop(task_ptr, task_ptr->ec.have_io, 0);
+        coroutine_notify_manager(task_ptr);
+        return;
+    }
+
+go:
+    io_bytes = read(arg->fd, &buf[ task_ptr->ec.have_io ], task_ptr->ec.need_io);
+    if (io_bytes == task_ptr->ec.need_io)
+    {
+        /* finished successfully */
+        ev_sock_stop(task_ptr, task_ptr->ec.have_io, 0);
+    }
+    else if (io_bytes > 0)
+    {
+        /* read successfully but haven't done yet */
+        task_ptr->ec.need_io -= io_bytes;
+        task_ptr->ec.have_io += io_bytes;
+        goto go;
+    }
+    else if (io_bytes == 0)
+    {
+        /* remote peer closed connection */
+        if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
+            ev_sock_stop(task_ptr, task_ptr->ec.have_io, errno);
+        else
+            ev_sock_stop(task_ptr, -1, errno);
+    }
+    else if (io_bytes == -1)
+    {
+        if (errno == EINTR) /* broke by signal */
+            goto go;
+        else if ((errno != EAGAIN) && (errno != EWOULDBLOCK)) /* unexpected failure */
+            ev_sock_stop(task_ptr, io_bytes, errno);
+        else /* read until EAGAIN / EWOULDBLOCK, need read later */
+            return;
+    }
+    else /* unexpected return value, should never get here */
+        abort();
+
+    coroutine_notify_manager(task_ptr);
+}
+
+static int
+do_sock_read(list_item_ptr(task_queue) task_ptr)
+{
+    struct io_arg_s *arg;
+
+    arg = &task_ptr->args.io_arg;
+    ev_io_init(&task_ptr->ec.sock_watcher, ev_sock_read, arg->fd, EV_READ);
+    ev_io_start(CurrLoop, &task_ptr->ec.sock_watcher);
+    if (arg->timeout_ms != 0)
+    {
+        ev_timer_init(&task_ptr->ec.sock_timer, ev_sock_timeout, arg->timeout_ms * 1.0 / 1000, 0.);
+        ev_timer_start(CurrLoop, &task_ptr->ec.sock_timer);
+    }
+    task_ptr->ec.have_io = 0;
+    task_ptr->ec.need_io = task_ptr->args.io_arg.count;
+
+    return 0;
+}
+
+/**
+ * @brief Do task in background worker thread
+ *
+ * @param task_ptr
+ *
+ * @return 0 if it's sync operation, 1 if async
+ */
+static int
 do_task(list_item_ptr(task_queue) task_ptr)
 {
+    int retval;
+
+    retval = -1; /* not necessary, to avoid compiler warning */
+
     switch (task_ptr->action)
     {
     case act_disk_open:
         do_disk_open(task_ptr);
+        retval = 0;
         break;
 
     case act_disk_read:
         do_disk_read(task_ptr);
+        retval = 0;
         break;
 
     case act_disk_write:
         do_disk_write(task_ptr);
+        retval = 0;
+        break;
+
+    case act_sock_read:
+        do_sock_read(task_ptr);
+        retval = 1;
         break;
 
     default:
         abort();
         break;
     }
+
+    return retval;
 }
 
 static void
@@ -318,7 +478,6 @@ new_event_handler(struct ev_loop *loop, ev_io *w, int event)
     ssize_t nread;
     unsigned char c;
     list_item_ptr(task_queue) task_ptr;
-    uint64_t cid;
 
     (void)loop;
     (void)w;
@@ -331,10 +490,10 @@ new_event_handler(struct ev_loop *loop, ev_io *w, int event)
         Shift(doing_queue, task_ptr);
         assert(task_ptr != NULL);
 
-        do_task(task_ptr);
-        Push(todo_queue, task_ptr);
-        cid = __sync_fetch_and_add(&coroutine_env.info.cid, 0);
-        sem_post(&coroutine_env.manager_sem[ cid % MANAGER_CNT ]);
+        if (do_task(task_ptr) == 0)
+        {
+            coroutine_notify_manager(task_ptr);
+        }
     }
     else
     {
@@ -351,7 +510,7 @@ new_background_worker(void *arg)
     assert(CurrLoop != NULL);
 
     ev_io_init(&CurrWatcher, new_event_handler, CurrReadPipe, EV_READ);
-    ev_io_start(CurrLoop, &coroutine_env.worker_ev[ g_thread_id ].watcher);
+    ev_io_start(CurrLoop, &CurrWatcher);
 
     ev_run(CurrLoop, 0);
 
@@ -414,6 +573,18 @@ coroutine_set_disk_write(int fd, void *buf, size_t count)
 
     task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
     task_ptr->action = act_disk_write;
+    task_ptr->args.io_arg.fd    = fd;
+    task_ptr->args.io_arg.buf   = buf;
+    task_ptr->args.io_arg.count = count;
+}
+
+void
+coroutine_set_sock_read(int fd, void *buf, size_t count)
+{
+    list_item_ptr(task_queue) task_ptr;
+
+    task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
+    task_ptr->action = act_sock_read;
     task_ptr->args.io_arg.fd    = fd;
     task_ptr->args.io_arg.buf   = buf;
     task_ptr->args.io_arg.count = count;

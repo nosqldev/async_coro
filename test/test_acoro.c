@@ -13,6 +13,10 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <CUnit/Basic.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/types.h>
 
 #include "acoro.h"
 
@@ -26,10 +30,25 @@
 #include "ev.h"
 #include "bsdqueue.h"
 
+/* {{{ hooks & predefined subs */
+
+#ifndef acoro_malloc
+#define acoro_malloc malloc
+#endif /* ! acoro_malloc */
+
+#ifndef acoro_free
+#define acoro_free free
+#endif /* ! acoro_free */
 
 #define Lock(name) list_lock(coroutine_env.name)
 #define UnLock(name) list_unlock(coroutine_env.name)
 
+#define Shift(name, ptr) do { Lock(name); list_shift(coroutine_env.name, ptr); UnLock(name); } while (0)
+#define Push(name, ptr) do { Lock(name); list_push(coroutine_env.name, ptr); UnLock(name); } while (0)
+
+#define IO_WATCHER_REF_TASKPTR(io_w_ptr) (list_item_ptr(task_queue))((char *)io_w_ptr - __offset_of(struct list_item_name(task_queue), ec.sock_watcher))
+
+/* }}} */
 /* {{{ config */
 
 /* TODO define MAX_* instead */
@@ -50,6 +69,10 @@
 /* }}} */
 /* {{{ enums & structures */
 
+/* TODO
+ * 1. rename *sock* to *tcp*
+ * 2. add tcp_connect
+ */
 enum action_t
 {
     act_new_coroutine,
@@ -58,13 +81,17 @@ enum action_t
     act_disk_open,
     act_disk_read,
     act_disk_write,
-    act_disk_close,
 
     act_sock_read,
+    act_sock_read_done,
     act_sock_write,
 
     act_disk_open_done,
     act_disk_read_done,
+    act_disk_write_done,
+
+    act_tcp_connect,
+    act_tcp_done,
 
     act_usleep,
 };
@@ -85,6 +112,8 @@ struct open_arg_s
 
 struct io_arg_s
 {
+    int timeout_ms; /* for sock io only */
+
     int fd;
     void *buf;
     size_t count;
@@ -95,6 +124,14 @@ union args_u
     struct init_arg_s init_arg;
     struct open_arg_s open_arg;
     struct io_arg_s io_arg;
+};
+
+struct ev_controller_s
+{
+    ev_io sock_watcher;
+    ev_timer sock_timer;
+    ssize_t have_io;
+    ssize_t need_io;
 };
 
 list_def(task_queue);
@@ -110,6 +147,7 @@ struct list_item_name(task_queue)
 
     ucontext_t task_context;
     void *stack_ptr;
+    struct ev_controller_s ec;
 
     list_next_ptr(task_queue);
 };
@@ -398,6 +436,85 @@ test_disk_io_failed(void)
     CU_ASSERT(lowestfd == curr_lowestfd);
 }
 
+void
+test_utils(void)
+{
+    list_item_ptr(task_queue) task_ptr = NULL;
+    list_item_ptr(task_queue) computed_addr = IO_WATCHER_REF_TASKPTR(&task_ptr->ec.sock_watcher);
+
+    CU_ASSERT(computed_addr == task_ptr);
+}
+
+void *
+dummy_write_server(void *arg)
+{
+    int listenfd;
+    struct sockaddr_in server_addr;
+    int flag = 1;
+    (void)arg;
+
+    listenfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(listenfd > 0);
+    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof flag);
+    bzero(&server_addr, sizeof server_addr);
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(2000);
+    assert(bind(listenfd, (struct sockaddr *) &server_addr, sizeof server_addr) == 0);
+    assert(listen(listenfd, 5) == 0);
+
+    int sockfd = accept(listenfd, NULL, NULL);
+    assert(sockfd > 0);
+    CU_ASSERT(write(sockfd, "abc", 3) == 3);
+    CU_ASSERT(write(sockfd, "abc", 3) == 3);
+    close(sockfd);
+    close(listenfd);
+
+    return NULL;
+}
+
+static void *
+sock_read(void *arg)
+{
+    (void)arg;
+    struct sockaddr_in server_addr;
+    char buf[32];
+
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(2000);
+    int sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(sockfd > 0);
+    CU_ASSERT(connect(sockfd, (struct sockaddr *)&server_addr, sizeof server_addr) == 0);
+    crt_set_nonblock(sockfd);
+    CU_ASSERT(crt_tcp_read(sockfd, buf, sizeof buf) == 6);
+    CU_ASSERT(crt_get_err_code() == EAGAIN);
+    CU_ASSERT(memcmp(buf, "abcabc", 6) == 0);
+
+    int ret = crt_tcp_read(sockfd, buf, sizeof buf);
+    CU_ASSERT(ret == -1);
+    CU_ASSERT(crt_get_err_code() == EBADF);
+
+    close(sockfd);
+
+    crt_exit(NULL);
+}
+
+void
+test_sock_read(void)
+{
+    pthread_t tid;
+    pthread_create(&tid, NULL, dummy_write_server, NULL);
+    sched_yield();
+    usleep(1000);
+
+    crt_create(NULL, NULL, sock_read, NULL);
+    usleep(1000);
+    CU_ASSERT(coroutine_env.info.ran == 6);
+
+    pthread_join(tid, NULL);
+}
+
 int
 check_coroutine(void)
 {
@@ -441,6 +558,20 @@ check_coroutine(void)
     /* }}} */
     /* {{{ CU_add_test: test_disk_io_failed */
     if (CU_add_test(pSuite, "test_disk_io_failed", test_disk_io_failed) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_utils */
+    if (CU_add_test(pSuite, "test_utils", test_utils) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_sock_read */
+    if (CU_add_test(pSuite, "test_sock_read", test_sock_read) == NULL)
     {
         CU_cleanup_registry();
         return CU_get_error();

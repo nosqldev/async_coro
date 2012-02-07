@@ -32,6 +32,7 @@ void coroutine_set_finished_coroutine();
 void coroutine_set_disk_open(const char *pathname, int flags, ...);
 void coroutine_set_disk_read(int fd, void *buf, size_t count);
 void coroutine_set_disk_write(int fd, void *buf, size_t count);
+void coroutine_set_sock_read(int fd, void *buf, size_t count);
 int  coroutine_get_retval();
 
 int init_coroutine_env();
@@ -95,6 +96,19 @@ int crt_get_err_code();
 /* This is not a slow call, so we can call close(2) directly */
 #define crt_disk_close(fd) ({                                   \
     int retval = close(fd);                                     \
+    retval;                                                     \
+})
+
+/* }}} */
+/* {{{ ssize_t crt_tcp_read(int fd, void *buf, size_t count) */
+
+#define crt_tcp_read(fd, buf, count) ({                         \
+    coroutine_set_sock_read(fd, buf, count);                    \
+    coroutine_notify_background_worker();                       \
+    ucontext_t *manager_context, *task_context;                 \
+    coroutine_get_context(&manager_context, &task_context);     \
+    swapcontext(task_context, manager_context);                 \
+    int retval = coroutine_get_retval();                        \
     retval;                                                     \
 })
 
