@@ -38,8 +38,10 @@
 
 #define Shift(name, ptr) do { Lock(name); list_shift(coroutine_env.name, ptr); UnLock(name); } while (0)
 #define Push(name, ptr) do { Lock(name); list_push(coroutine_env.name, ptr); UnLock(name); } while (0)
+#define Remove(name, ptr) do { Lock(name); list_remove(coroutine_env.name, ptr); UnLock(name); } while (0)
 
-#define IO_WATCHER_REF_TASKPTR(io_w_ptr) (list_item_ptr(task_queue))((char *)io_w_ptr - __offset_of(struct list_item_name(task_queue), ec.sock_watcher))
+#define IO_WATCHER_REF_TASKPTR(io_w_ptr)    (list_item_ptr(task_queue))((char *)io_w_ptr - __offset_of(struct list_item_name(task_queue), ec.sock_watcher))
+#define TIMER_WATCHER_REF_TASKPTR(tm_w_ptr) (list_item_ptr(task_queue))((char *)tm_w_ptr - __offset_of(struct list_item_name(task_queue), ec.sock_timer))
 
 /* }}} */
 /* {{{ config */
@@ -342,9 +344,14 @@ ev_sock_stop(list_item_ptr(task_queue) task_ptr, int retval, int err_code)
 static void
 ev_sock_timeout(struct ev_loop *loop, ev_timer *timer_w, int event)
 {
+    list_item_ptr(task_queue) task_ptr;
+
     (void)loop;
-    (void)timer_w;
-    (void)event;
+
+    assert(event == EV_TIMEOUT);
+    task_ptr = TIMER_WATCHER_REF_TASKPTR(timer_w);
+    ev_sock_stop(task_ptr, -1, EWOULDBLOCK);
+    coroutine_notify_manager(task_ptr);
 }
 
 static void
@@ -356,7 +363,6 @@ ev_sock_read(struct ev_loop *loop, ev_io *io_w, int event)
     char *buf;
 
     (void)loop;
-    (void)event;
 
     assert(event == EV_READ);
     task_ptr = IO_WATCHER_REF_TASKPTR(io_w);
@@ -579,7 +585,7 @@ coroutine_set_disk_write(int fd, void *buf, size_t count)
 }
 
 void
-coroutine_set_sock_read(int fd, void *buf, size_t count)
+coroutine_set_sock_read(int fd, void *buf, size_t count, int msec)
 {
     list_item_ptr(task_queue) task_ptr;
 
@@ -588,6 +594,7 @@ coroutine_set_sock_read(int fd, void *buf, size_t count)
     task_ptr->args.io_arg.fd    = fd;
     task_ptr->args.io_arg.buf   = buf;
     task_ptr->args.io_arg.count = count;
+    task_ptr->args.io_arg.timeout_ms = msec;
 }
 
 void

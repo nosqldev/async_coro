@@ -17,6 +17,8 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/types.h>
+#include <time.h>
+#include <sys/time.h>
 
 /* include acoro.c directly instead of link, so that can share structures,
  * global variables, functions and so on.
@@ -275,8 +277,39 @@ test_utils(void)
 {
     list_item_ptr(task_queue) task_ptr = NULL;
     list_item_ptr(task_queue) computed_addr = IO_WATCHER_REF_TASKPTR(&task_ptr->ec.sock_watcher);
+    list_item_ptr(task_queue) computed_addr2 = TIMER_WATCHER_REF_TASKPTR(&task_ptr->ec.sock_timer);
 
     CU_ASSERT(computed_addr == task_ptr);
+    CU_ASSERT(computed_addr2 == task_ptr);
+}
+
+void *
+dummy_slow_server(void *arg)
+{
+    int listenfd;
+    struct sockaddr_in server_addr;
+    int flag = 1;
+    (void)arg;
+
+    listenfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(listenfd > 0);
+    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof flag);
+    bzero(&server_addr, sizeof server_addr);
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(2000);
+    assert(bind(listenfd, (struct sockaddr *) &server_addr, sizeof server_addr) == 0);
+    assert(listen(listenfd, 5) == 0);
+
+    int sockfd = accept(listenfd, NULL, NULL);
+    assert(sockfd > 0);
+
+    usleep(1000 * 10);
+
+    close(sockfd);
+    close(listenfd);
+
+    return NULL;
 }
 
 void *
@@ -349,6 +382,55 @@ test_sock_read(void)
     pthread_join(tid, NULL);
 }
 
+void *
+sock_timeout(void *arg)
+{
+    (void)arg;
+    struct sockaddr_in server_addr;
+    char buf[32];
+    struct timeval start, end, used;
+
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(2000);
+    int sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(sockfd > 0);
+    CU_ASSERT(connect(sockfd, (struct sockaddr *)&server_addr, sizeof server_addr) == 0);
+    crt_set_nonblock(sockfd);
+
+    gettimeofday(&start, NULL);
+    CU_ASSERT(crt_tcp_read_to(sockfd, buf, sizeof buf, 1) == -1);
+    CU_ASSERT(crt_get_err_code() == EWOULDBLOCK);
+    gettimeofday(&end, NULL);
+    (&used)->tv_sec = (&end)->tv_sec - (&start)->tv_sec;
+    (&used)->tv_usec = (&end)->tv_usec - (&start)->tv_usec;
+    if ((&used)->tv_usec < 0){
+        (&used)->tv_sec --;
+        (&used)->tv_usec += 1000000;
+    }
+    CU_ASSERT(used.tv_sec == 0);
+    CU_ASSERT(used.tv_usec <= 1000 * 20); /* more time to make sure: 20 ms */
+
+    close(sockfd);
+
+    crt_exit(NULL);
+}
+
+void
+test_sock_timeout(void)
+{
+    pthread_t tid;
+    pthread_create(&tid, NULL, dummy_slow_server, NULL);
+    sched_yield();
+    usleep(1000);
+
+    crt_create(NULL, NULL, sock_timeout, NULL);
+    usleep(20 * 1000);
+    CU_ASSERT(coroutine_env.info.ran == 7);
+
+    pthread_join(tid, NULL);
+}
+
 int
 check_coroutine(void)
 {
@@ -406,6 +488,13 @@ check_coroutine(void)
     /* }}} */
     /* {{{ CU_add_test: test_sock_read */
     if (CU_add_test(pSuite, "test_sock_read", test_sock_read) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_sock_timeout */
+    if (CU_add_test(pSuite, "test_sock_timeout", test_sock_timeout) == NULL)
     {
         CU_cleanup_registry();
         return CU_get_error();

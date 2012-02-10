@@ -32,17 +32,19 @@ void coroutine_set_finished_coroutine();
 void coroutine_set_disk_open(const char *pathname, int flags, ...);
 void coroutine_set_disk_read(int fd, void *buf, size_t count);
 void coroutine_set_disk_write(int fd, void *buf, size_t count);
-void coroutine_set_sock_read(int fd, void *buf, size_t count);
+void coroutine_set_sock_read(int fd, void *buf, size_t count, int msec);
 int  coroutine_get_retval();
 
 int init_coroutine_env();
 int destroy_coroutine_env();
 int crt_create(coroutine_t *cid, const void * restrict attr, begin_routine_t br, void * restrict arg);
 
+#define crt_errno (crt_get_err_code())
 int crt_set_nonblock(int fd);
 int crt_set_block(int fd);
 int crt_get_err_code();
-/* {{{ void crt_exit(void *) */
+
+/* {{{ void     crt_exit(void *) */
 
 #define crt_exit(value_ptr) do {        \
     coroutine_set_finished_coroutine(); \
@@ -50,7 +52,7 @@ int crt_get_err_code();
 } while (0)
 
 /* }}} */
-/* {{{ int crt_disk_open(const char *, int, ...) */
+/* {{{ int      crt_disk_open(const char *, int, ...) */
 
 /* Actually, open(2) is a slow call, might be block while disk addressing or io
  * queue is full, etc. */
@@ -65,7 +67,7 @@ int crt_get_err_code();
 })
 
 /* }}} */
-/* {{{ ssize_t crt_disk_read(int fd, void *buf, size_t count) */
+/* {{{ ssize_t  crt_disk_read(int fd, void *buf, size_t count) */
 
 #define crt_disk_read(fd, buf, count) ({                        \
     coroutine_set_disk_read(fd, buf, count);                    \
@@ -78,7 +80,7 @@ int crt_get_err_code();
 })
 
 /* }}} */
-/* {{{ ssize_t crt_disk_write(int fd, const void *buf, size_t count) */
+/* {{{ ssize_t  crt_disk_write(int fd, const void *buf, size_t count) */
 
 #define crt_disk_write(fd, buf, count) ({                       \
     coroutine_set_disk_write(fd, buf, count);                   \
@@ -91,7 +93,7 @@ int crt_get_err_code();
 })
 
 /* }}} */
-/* {{{ int crt_disk_close(int fd) */
+/* {{{ int      crt_disk_close(int fd) */
 
 /* This is not a slow call, so we can call close(2) directly */
 #define crt_disk_close(fd) ({                                   \
@@ -100,10 +102,36 @@ int crt_get_err_code();
 })
 
 /* }}} */
-/* {{{ ssize_t crt_tcp_read(int fd, void *buf, size_t count) */
+/* {{{ ssize_t  crt_tcp_read(int fd, void *buf, size_t count) */
 
 #define crt_tcp_read(fd, buf, count) ({                         \
-    coroutine_set_sock_read(fd, buf, count);                    \
+    coroutine_set_sock_read(fd, buf, count, 0);                 \
+    coroutine_notify_background_worker();                       \
+    ucontext_t *manager_context, *task_context;                 \
+    coroutine_get_context(&manager_context, &task_context);     \
+    swapcontext(task_context, manager_context);                 \
+    int retval = coroutine_get_retval();                        \
+    retval;                                                     \
+})
+
+/* }}} */
+/* {{{ ssize_t  crt_tcp_write(int fd, void *buf, size_t count) */
+
+#define crt_tcp_write(fd, buf, count) ({                        \
+    coroutine_set_sock_write(fd, buf, count);                   \
+    coroutine_notify_background_worker();                       \
+    ucontext_t *manager_context, *task_context;                 \
+    coroutine_get_context(&manager_context, &task_context);     \
+    swapcontext(task_context, manager_context);                 \
+    int retval = coroutine_get_retval();                        \
+    retval;                                                     \
+})
+
+/* }}} */
+/* {{{ ssize_t  crt_tcp_read_to(int fd, void *buf, size_t count, int msec) */
+
+#define crt_tcp_read_to(fd, buf, count, msec) ({                \
+    coroutine_set_sock_read(fd, buf, count, msec);              \
     coroutine_notify_background_worker();                       \
     ucontext_t *manager_context, *task_context;                 \
     coroutine_get_context(&manager_context, &task_context);     \
