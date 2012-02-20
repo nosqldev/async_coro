@@ -346,6 +346,7 @@ sock_read(void *arg)
     (void)arg;
     struct sockaddr_in server_addr;
     char buf[32];
+    ssize_t nread;
 
     server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
     server_addr.sin_family = AF_INET;
@@ -354,13 +355,17 @@ sock_read(void *arg)
     assert(sockfd > 0);
     CU_ASSERT(connect(sockfd, (struct sockaddr *)&server_addr, sizeof server_addr) == 0);
     crt_set_nonblock(sockfd);
-    CU_ASSERT(crt_tcp_read(sockfd, buf, sizeof buf) == 6);
-    CU_ASSERT(crt_get_err_code() == EAGAIN);
+    CU_ASSERT((nread=crt_tcp_read(sockfd, buf, sizeof buf)) == 6);
+    if (nread != 6)
+    {
+        printf("\nnread = %zd, errcode = %d, err = %s\n", nread, crt_get_err_code(), strerror(crt_get_err_code()));
+    }
+    CU_ASSERT(crt_get_err_code() == 0);
     CU_ASSERT(memcmp(buf, "abcabc", 6) == 0);
 
     int ret = crt_tcp_read(sockfd, buf, sizeof buf);
-    CU_ASSERT(ret == -1);
-    CU_ASSERT(crt_get_err_code() == EBADF);
+    CU_ASSERT(ret == 0);
+    CU_ASSERT(crt_get_err_code() == 0);
 
     close(sockfd);
 

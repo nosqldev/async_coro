@@ -379,6 +379,7 @@ ev_sock_read(struct ev_loop *loop, ev_io *io_w, int event)
     }
 
 go:
+    errno = 0;
     io_bytes = read(arg->fd, &buf[ task_ptr->ec.have_io ], task_ptr->ec.need_io);
     if (io_bytes == task_ptr->ec.need_io)
     {
@@ -395,7 +396,7 @@ go:
     else if (io_bytes == 0)
     {
         /* remote peer closed connection */
-        if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
+        if ((errno == EAGAIN) || (errno == EWOULDBLOCK) || (errno == 0))
             ev_sock_stop(task_ptr, task_ptr->ec.have_io, errno);
         else
             ev_sock_stop(task_ptr, -1, errno);
