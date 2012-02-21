@@ -118,7 +118,7 @@ int crt_get_err_code();
 /* {{{ ssize_t  crt_tcp_write(int fd, void *buf, size_t count) */
 
 #define crt_tcp_write(fd, buf, count) ({                        \
-    coroutine_set_sock_write(fd, buf, count);                   \
+    coroutine_set_sock_write(fd, buf, count, 0);                \
     coroutine_notify_background_worker();                       \
     ucontext_t *manager_context, *task_context;                 \
     coroutine_get_context(&manager_context, &task_context);     \

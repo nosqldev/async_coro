@@ -384,6 +384,8 @@ go:
     if (io_bytes == task_ptr->ec.need_io)
     {
         /* finished successfully */
+        task_ptr->ec.have_io += io_bytes;
+        task_ptr->ec.need_io -= io_bytes;
         ev_sock_stop(task_ptr, task_ptr->ec.have_io, 0);
     }
     else if (io_bytes > 0)
@@ -435,6 +437,89 @@ do_sock_read(list_item_ptr(task_queue) task_ptr)
     return 0;
 }
 
+static void
+ev_sock_write(struct ev_loop *loop, ev_io *io_w, int event)
+{
+    list_item_ptr(task_queue) task_ptr;
+    struct io_arg_s *arg;
+    ssize_t io_bytes;
+    char *buf;
+
+    (void)loop;
+
+    assert(event == EV_WRITE);
+    task_ptr = IO_WATCHER_REF_TASKPTR(io_w);
+    arg = &task_ptr->args.io_arg;
+    assert(fcntl(arg->fd, F_GETFL) & O_NONBLOCK);
+    assert(task_ptr->action == act_sock_write);
+    buf = arg->buf;
+
+    if (task_ptr->ec.need_io == 0)
+    {
+        ev_sock_stop(task_ptr, task_ptr->ec.have_io, 0);
+        coroutine_notify_manager(task_ptr);
+        return;
+    }
+
+go:
+    errno = 0;
+    io_bytes = write(arg->fd, &buf[ task_ptr->ec.have_io ], task_ptr->ec.need_io);
+    if (io_bytes == task_ptr->ec.need_io)
+    {
+        /* write done */
+        task_ptr->ec.have_io += io_bytes;
+        task_ptr->ec.need_io -= io_bytes;
+        ev_sock_stop(task_ptr, task_ptr->ec.have_io, 0);
+    }
+    else if (io_bytes > 0)
+    {
+        /* write successfully but haven't done yet */
+        task_ptr->ec.need_io -= io_bytes;
+        task_ptr->ec.have_io += io_bytes;
+        goto go;
+    }
+    else if (io_bytes == 0)
+    {
+        /* remote peer closed connection */
+        if ((errno == EAGAIN) || (errno == EWOULDBLOCK) || (errno == 0))
+            ev_sock_stop(task_ptr, task_ptr->ec.have_io, errno);
+        else
+            ev_sock_stop(task_ptr, -1, errno);
+    }
+    else if (io_bytes == -1)
+    {
+        if (errno == EINTR) /* broke by signal */
+            goto go;
+        else if ((errno != EAGAIN) && (errno != EWOULDBLOCK)) /* unexpected failure */
+            ev_sock_stop(task_ptr, io_bytes, errno);
+        else /* write until EAGAIN / EWOULDBLOCK, need write later */
+            return;
+    }
+    else /* unexpected return value, should never get here */
+        abort();
+
+    coroutine_notify_manager(task_ptr);
+}
+
+static int
+do_sock_write(list_item_ptr(task_queue) task_ptr)
+{
+    struct io_arg_s *arg;
+
+    arg = &task_ptr->args.io_arg;
+    ev_io_init(&task_ptr->ec.sock_watcher, ev_sock_write, arg->fd, EV_WRITE);
+    ev_io_start(CurrLoop, &task_ptr->ec.sock_watcher);
+    if (arg->timeout_ms != 0)
+    {
+        ev_timer_init(&task_ptr->ec.sock_timer, ev_sock_timeout, arg->timeout_ms * 1.0 / 1000, 0.);
+        ev_timer_start(CurrLoop, &task_ptr->ec.sock_timer);
+    }
+    task_ptr->ec.have_io = 0;
+    task_ptr->ec.need_io = task_ptr->args.io_arg.count;
+
+    return 0;
+}
+
 /**
  * @brief Do task in background worker thread
  *
@@ -471,6 +556,11 @@ do_task(list_item_ptr(task_queue) task_ptr)
         retval = 1;
         break;
 
+    case act_sock_write:
+        do_sock_write(task_ptr);
+        retval = 1;
+        break;
+
     default:
         abort();
         break;
@@ -485,6 +575,7 @@ new_event_handler(struct ev_loop *loop, ev_io *w, int event)
     ssize_t nread;
     unsigned char c;
     list_item_ptr(task_queue) task_ptr;
+    int ret;
 
     (void)loop;
     (void)w;
@@ -497,9 +588,14 @@ new_event_handler(struct ev_loop *loop, ev_io *w, int event)
         Shift(doing_queue, task_ptr);
         assert(task_ptr != NULL);
 
-        if (do_task(task_ptr) == 0)
+        ret = do_task(task_ptr);
+        if (ret == 0)
         {
             coroutine_notify_manager(task_ptr);
+        }
+        else if (ret != 1)
+        {
+            abort();
         }
     }
     else
@@ -592,6 +688,19 @@ coroutine_set_sock_read(int fd, void *buf, size_t count, int msec)
 
     task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
     task_ptr->action = act_sock_read;
+    task_ptr->args.io_arg.fd    = fd;
+    task_ptr->args.io_arg.buf   = buf;
+    task_ptr->args.io_arg.count = count;
+    task_ptr->args.io_arg.timeout_ms = msec;
+}
+
+void
+coroutine_set_sock_write(int fd, void *buf, size_t count, int msec)
+{
+    list_item_ptr(task_queue) task_ptr;
+
+    task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
+    task_ptr->action = act_sock_write;
     task_ptr->args.io_arg.fd    = fd;
     task_ptr->args.io_arg.buf   = buf;
     task_ptr->args.io_arg.count = count;

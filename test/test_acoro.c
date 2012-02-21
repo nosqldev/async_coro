@@ -436,6 +436,81 @@ test_sock_timeout(void)
     pthread_join(tid, NULL);
 }
 
+void *
+dummy_read_server(void *arg)
+{
+    int listenfd;
+    struct sockaddr_in server_addr;
+    int flag = 1;
+    (void)arg;
+    char buf1[32] = {0};
+    char buf2[32] = {0};
+
+    listenfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(listenfd > 0);
+    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof flag);
+    bzero(&server_addr, sizeof server_addr);
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(2000);
+    assert(bind(listenfd, (struct sockaddr *) &server_addr, sizeof server_addr) == 0);
+    assert(listen(listenfd, 5) == 0);
+
+    int sockfd = accept(listenfd, NULL, NULL);
+    assert(sockfd > 0);
+    CU_ASSERT(read(sockfd, buf1, 3) == 3);
+    CU_ASSERT(read(sockfd, buf2, 3) == 3);
+    CU_ASSERT(memcmp(buf1, "abc", 3) == 0);
+    CU_ASSERT(memcmp(buf2, "xyz", 3) == 0);
+    close(sockfd);
+    close(listenfd);
+
+    return NULL;
+}
+
+static void *
+sock_write(void *arg)
+{
+    (void)arg;
+    struct sockaddr_in server_addr;
+    ssize_t nwrite;
+
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(2000);
+    int sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(sockfd > 0);
+    CU_ASSERT(connect(sockfd, (struct sockaddr *)&server_addr, sizeof server_addr) == 0);
+    crt_set_nonblock(sockfd);
+    CU_ASSERT((nwrite=crt_tcp_write(sockfd, "abc", 3)) == 3);
+    if (nwrite != 3) printf("written: %zd\n", nwrite);
+    CU_ASSERT((nwrite=crt_tcp_write(sockfd, "xyz", 3)) == 3);
+    if (nwrite != 3) printf("written: %zd\n", nwrite);
+    CU_ASSERT(crt_get_err_code() == 0);
+    int ret = crt_tcp_write(sockfd, "123", 3);
+    CU_ASSERT(ret == 3);
+    CU_ASSERT(crt_get_err_code() == 0);
+
+    close(sockfd);
+
+    crt_exit(NULL);
+}
+
+void
+test_sock_write(void)
+{
+    pthread_t tid;
+    pthread_create(&tid, NULL, dummy_read_server, NULL);
+    sched_yield();
+    usleep(1000);
+
+    crt_create(NULL, NULL, sock_write, NULL);
+    usleep(1000);
+    CU_ASSERT(coroutine_env.info.ran == 8);
+
+    pthread_join(tid, NULL);
+}
+
 int
 check_coroutine(void)
 {
@@ -500,6 +575,13 @@ check_coroutine(void)
     /* }}} */
     /* {{{ CU_add_test: test_sock_timeout */
     if (CU_add_test(pSuite, "test_sock_timeout", test_sock_timeout) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_sock_write */
+    if (CU_add_test(pSuite, "test_sock_write", test_sock_write) == NULL)
     {
         CU_cleanup_registry();
         return CU_get_error();
