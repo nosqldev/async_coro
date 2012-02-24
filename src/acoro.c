@@ -59,7 +59,7 @@
 #endif /* ! MANAGER_CNT */
 
 #ifndef BACKGROUND_WORKER_CNT
-#define BACKGROUND_WORKER_CNT (2)
+#define BACKGROUND_WORKER_CNT (4)
 #endif /* ! BACKGROUND_WORKER_CNT */
 
 #ifndef COROUTINE_STACK_SIZE
@@ -552,6 +552,7 @@ do_tcp_blocked_connect(list_item_ptr(task_queue) task_ptr)
     int ret;
     int sockfd;
     struct sockaddr_in server_addr;
+    int flag;
 
     arg = &task_ptr->args.connect_arg;
 
@@ -560,6 +561,18 @@ do_tcp_blocked_connect(list_item_ptr(task_queue) task_ptr)
     {
         task_ptr->ret.val = sockfd;
         task_ptr->ret.err_code = errno;
+        task_ptr->action = act_tcp_blocked_connect_done;
+
+        return 0;
+    }
+    ret = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof flag);
+    if (ret < 0)
+    {
+        task_ptr->ret.val = ret;
+        task_ptr->ret.err_code = errno;
+        task_ptr->action = act_tcp_blocked_connect_done;
+
+        return 0;
     }
 
     memset(&server_addr, 0, sizeof server_addr);
@@ -577,6 +590,9 @@ do_tcp_blocked_connect(list_item_ptr(task_queue) task_ptr)
     {
         task_ptr->ret.val = ret;
         task_ptr->ret.err_code = errno;
+        task_ptr->action = act_tcp_blocked_connect_done;
+
+        return 0;
     }
 
     crt_set_nonblock(sockfd);

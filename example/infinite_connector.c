@@ -21,6 +21,7 @@ static in_addr_t ip;
 static in_port_t port;
 
 static const char *header = "GET /%d%d HTTP/1.0\r\nUser-Agent: curl/7.19.7\r\nHost: 122.11.56.5:8080\r\nAccept: */*\r\n\r\n";
+static volatile int alive_cnt;
 
 void *
 connector(void *arg)
@@ -43,6 +44,7 @@ connector(void *arg)
     }
 
     printf("%d connected, writing\n", id);
+    alive_cnt ++;
 
     ssize_t nwrite = crt_tcp_write_to(fd, buf, len, 1000 * 10);
     if (nwrite != (ssize_t)len)
@@ -61,9 +63,11 @@ connector(void *arg)
     }
     buf[nread] = '\0';
 
-    printf("[%d] got: %s\n", id, buf);
+    printf("[%d] got(%zd): %s\n", id, nread, buf);
 
     crt_sock_close(fd);
+
+    alive_cnt --;
 
     crt_exit(NULL);
 }
@@ -72,6 +76,7 @@ int
 main(int argc, char **argv)
 {
     init_coroutine_env();
+    alive_cnt = 0;
 
     if (argc != 4)
     {
@@ -88,7 +93,13 @@ main(int argc, char **argv)
         crt_create(NULL, NULL, connector, (void*)(uintptr_t)i);
     }
 
-    pause();
+    for ( ; ; )
+    {
+        sleep(10);
+        printf("alive connections: %d\n", alive_cnt);
+        if (alive_cnt == 0)
+            exit(0);
+    }
 
     return 0;
 }

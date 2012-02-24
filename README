@@ -2,7 +2,7 @@ Introduction
 ------------
 This library try to encapsulate new APIs so that you can create coroutines as pthread, write readable/intelligible code, easy to port old pthread related code to thread-less application, and what's more important: high performance.
 
-This library provides coroutine management and a series of IO functions to make you write code easily, context will be switched while executing these slow IO functions.
+This library provides coroutine management and a series of IO functions to make you write code easily, context will be switched while executing these slow IO functions. Refer to examples for more informations.
 
 Background
 ----------

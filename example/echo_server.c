@@ -25,6 +25,8 @@
 #define PORT (2000)
 #define MAX_BUF_LEN (1024 * 1024)
 
+static volatile uint64_t conn_cnt = 0;
+
 void *
 echo_func(void *arg)
 {
@@ -35,6 +37,7 @@ echo_func(void *arg)
     buf = malloc(MAX_BUF_LEN);
     crt_set_nonblock(fd);
 
+    uint64_t cnt = __sync_fetch_and_add(&conn_cnt, 1);
     int i;
     for (i=0; i<MAX_BUF_LEN-1; i++)
     {
@@ -47,6 +50,7 @@ echo_func(void *arg)
     /*printf("nread = %zd\n", nread);*/
     if (nread != 1)
     {
+        free(buf);
         crt_sock_close(fd);
         printf("err(%zd): %s - [%s]\n", nread, strerror(crt_errno), buf);
         crt_exit(NULL);
@@ -54,7 +58,7 @@ echo_func(void *arg)
     buf[i + 1] = '\0';
     ssize_t nwrite = crt_tcp_write(fd, &buf[0], strlen(buf));
     buf[ strlen(buf) - 1 ] = '\0';
-    printf("read: %d, write: %zd, [%s]\n", i+1, nwrite, buf);
+    printf("[%lu] read: %d, write: %zd, [%s]\n", cnt, i+1, nwrite, buf);
 
     free(buf);
     close(fd);
@@ -78,7 +82,7 @@ server(void)
     flag = 1;
     setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
     bzero(&server_addr, sizeof server_addr);
-    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(PORT);
 

@@ -28,6 +28,11 @@ connector(void *arg)
     char buf[128] = {0};
 
     int fd = crt_tcp_blocked_connect(ip, port);
+    if (fd < 0)
+    {
+        printf("[%d] err: %s\n", id, strerror(crt_errno));
+        crt_exit(NULL);
+    }
     snprintf(buf, sizeof buf, "%d\n", rand());
     size_t len = strlen(buf);
     ssize_t nwrite = crt_tcp_write(fd, buf, len);
