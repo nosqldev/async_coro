@@ -9,11 +9,16 @@
  * +----------------------------------------------------------------------+
  */
 
+/* TODO:
+ * 1. timeout connect
+ * 2. mutiple manager_sem
+ * 3. sleep
+ */
+
 /* {{{ include header files */
 
 #include <string.h>
 #include <assert.h>
-#include <pthread.h>
 #include <semaphore.h>
 #include <fcntl.h>
 #include <sched.h>
@@ -58,7 +63,7 @@
 #endif /* ! BACKGROUND_WORKER_CNT */
 
 #ifndef COROUTINE_STACK_SIZE
-#define COROUTINE_STACK_SIZE (1024 * 4)
+#define COROUTINE_STACK_SIZE (1024 * 32)
 #endif /* ! COROUTINE_STACK_SIZE */
 
 /* }}} */
@@ -78,17 +83,17 @@ enum action_t
     act_disk_write,
 
     act_sock_read,
-    act_sock_read_done,
     act_sock_write,
+    act_sock_done,
 
     act_disk_open_done,
     act_disk_read_done,
     act_disk_write_done,
 
-    act_tcp_connect,
-    act_tcp_done,
+    act_tcp_blocked_connect,
+    act_tcp_blocked_connect_done,
 
-    act_usleep,
+    act_usleep, /* TODO */
 };
 
 struct init_arg_s
@@ -114,11 +119,20 @@ struct io_arg_s
     size_t count;
 };
 
+struct connect_arg_s
+{
+    int timeout_ms; /* for timeout connect only */
+
+    in_addr_t ip;
+    in_port_t port;
+};
+
 union args_u
 {
     struct init_arg_s init_arg;
     struct open_arg_s open_arg;
     struct io_arg_s io_arg;
+    struct connect_arg_s connect_arg;
 };
 
 struct ev_controller_s
@@ -220,24 +234,35 @@ loop:
             break;
 
         case act_disk_open_done:
+            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
             swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
             if (task_ptr->action == act_finished_coroutine)
                 goto loop;
             break;
 
         case act_disk_read_done:
+            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
             swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
             if (task_ptr->action == act_finished_coroutine)
                 goto loop;
             break;
 
         case act_disk_write_done:
+            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
             swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
             if (task_ptr->action == act_finished_coroutine)
                 goto loop;
             break;
 
-        case act_sock_read_done:
+        case act_sock_done:
+            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
+            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
+            if (task_ptr->action == act_finished_coroutine)
+                goto loop;
+            break;
+
+        case act_tcp_blocked_connect_done:
+            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
             swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
             if (task_ptr->action == act_finished_coroutine)
                 goto loop;
@@ -336,7 +361,7 @@ ev_sock_stop(list_item_ptr(task_queue) task_ptr, int retval, int err_code)
         ev_timer_stop(CurrLoop, &task_ptr->ec.sock_timer);
     task_ptr->ret.val = retval;
     task_ptr->ret.err_code = err_code;
-    task_ptr->action = act_sock_read_done;
+    task_ptr->action = act_sock_done;
 
     return 0;
 }
@@ -520,6 +545,46 @@ do_sock_write(list_item_ptr(task_queue) task_ptr)
     return 0;
 }
 
+static int
+do_tcp_blocked_connect(list_item_ptr(task_queue) task_ptr)
+{
+    struct connect_arg_s *arg;
+    int ret;
+    int sockfd;
+    struct sockaddr_in server_addr;
+
+    arg = &task_ptr->args.connect_arg;
+
+    sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sockfd < 0)
+    {
+        task_ptr->ret.val = sockfd;
+        task_ptr->ret.err_code = errno;
+    }
+
+    memset(&server_addr, 0, sizeof server_addr);
+    server_addr.sin_addr.s_addr = arg->ip;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = arg->port;
+
+    ret = connect(sockfd, (struct sockaddr*)&server_addr, sizeof server_addr);
+    if (ret == 0)
+    {
+        task_ptr->ret.val = sockfd;
+        task_ptr->ret.err_code = 0;
+    }
+    else
+    {
+        task_ptr->ret.val = ret;
+        task_ptr->ret.err_code = errno;
+    }
+
+    crt_set_nonblock(sockfd);
+    task_ptr->action = act_tcp_blocked_connect_done;
+
+    return 0;
+}
+
 /**
  * @brief Do task in background worker thread
  *
@@ -559,6 +624,11 @@ do_task(list_item_ptr(task_queue) task_ptr)
     case act_sock_write:
         do_sock_write(task_ptr);
         retval = 1;
+        break;
+
+    case act_tcp_blocked_connect:
+        do_tcp_blocked_connect(task_ptr);
+        retval = 0;
         break;
 
     default:
@@ -705,6 +775,18 @@ coroutine_set_sock_write(int fd, void *buf, size_t count, int msec)
     task_ptr->args.io_arg.buf   = buf;
     task_ptr->args.io_arg.count = count;
     task_ptr->args.io_arg.timeout_ms = msec;
+}
+
+void
+coroutine_set_sock_connect(in_addr_t ip, in_port_t port, int msec)
+{
+    list_item_ptr(task_queue) task_ptr;
+
+    task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
+    task_ptr->action = act_tcp_blocked_connect;
+    task_ptr->args.connect_arg.ip = ip;
+    task_ptr->args.connect_arg.port = port;
+    task_ptr->args.connect_arg.timeout_ms = msec;
 }
 
 void

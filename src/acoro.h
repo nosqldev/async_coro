@@ -17,6 +17,11 @@
 #include <stdarg.h>
 #include <ucontext.h>
 #include <errno.h>
+#include <pthread.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
 
 typedef void *(*begin_routine_t)(void*);
 typedef uint64_t coroutine_t;
@@ -33,6 +38,8 @@ void coroutine_set_disk_open(const char *pathname, int flags, ...);
 void coroutine_set_disk_read(int fd, void *buf, size_t count);
 void coroutine_set_disk_write(int fd, void *buf, size_t count);
 void coroutine_set_sock_read(int fd, void *buf, size_t count, int msec);
+void coroutine_set_sock_write(int fd, void *buf, size_t count, int msec);
+void coroutine_set_sock_connect(in_addr_t ip, in_port_t port, int msec);
 int  coroutine_get_retval();
 
 int init_coroutine_env();
@@ -141,6 +148,41 @@ int crt_get_err_code();
 })
 
 /* }}} */
+/* {{{ ssize_t  crt_tcp_write_to(int fd, void *buf, size_t count, int msec) */
+
+#define crt_tcp_write_to(fd, buf, count, msec) ({               \
+    coroutine_set_sock_write(fd, buf, count, msec);             \
+    coroutine_notify_background_worker();                       \
+    ucontext_t *manager_context, *task_context;                 \
+    coroutine_get_context(&manager_context, &task_context);     \
+    swapcontext(task_context, manager_context);                 \
+    int retval = coroutine_get_retval();                        \
+    retval;                                                     \
+})
+
+/* }}} */
+/* {{{ int      crt_tcp_blocked_connect(in_addr_t ip, in_port_t port) */
+
+#define crt_tcp_blocked_connect(ip, port) ({                    \
+    coroutine_set_sock_connect(ip, port, 0);                    \
+    coroutine_notify_background_worker();                       \
+    ucontext_t *manager_context, *task_context;                 \
+    coroutine_get_context(&manager_context, &task_context);     \
+    swapcontext(task_context, manager_context);                 \
+    int retval = coroutine_get_retval();                        \
+    retval;                                                     \
+})
+
+/* }}} */
+/* {{{ int      crt_sock_close(int fd) */
+
+/* This is not a slow call, so we can call close(2) directly */
+#define crt_sock_close(fd) ({                                   \
+    int retval = close(fd);                                     \
+    retval;                                                     \
+})
+
+/* }}} */
 
 #endif /* ! _ACORO_H_ */
-/* vim: set expandtab tabstop=4 shiftwidth=4 foldmethod=marker: */
+/* vim: set expandtab tabstop=4 shiftwidth=4 ft=c foldmethod=marker: */
