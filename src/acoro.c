@@ -883,11 +883,21 @@ destroy_coroutine_env()
     {
         pthread_cancel(coroutine_env.manager_tid[i]);
         sem_destroy(&coroutine_env.manager_sem[i]);
+        pthread_join(coroutine_env.manager_tid[i], NULL);
     }
     for (int i=0; i<BACKGROUND_WORKER_CNT; i++)
+    {
         pthread_cancel(coroutine_env.background_worker_tid[i]);
+        pthread_join(coroutine_env.background_worker_tid[i], NULL);
+    }
     for (int i=0; i<BACKGROUND_WORKER_CNT*2; i++)
         close(coroutine_env.pipe_channel[i]);
+
+    for (int i=0; i<BACKGROUND_WORKER_CNT; i++)
+    {
+        ev_io_stop(coroutine_env.worker_ev[i].loop, &coroutine_env.worker_ev[i].watcher);
+        ev_loop_destroy(coroutine_env.worker_ev[i].loop);
+    }
 
     return 0;
 }

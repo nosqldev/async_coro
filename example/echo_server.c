@@ -47,12 +47,13 @@ echo_func(void *arg)
         if (buf[i] == '\n')
             break;
     }
+    buf[i+1] = '\0';
     /*printf("nread = %zd\n", nread);*/
     if (nread != 1)
     {
-        free(buf);
         crt_sock_close(fd);
         printf("err(%zd): %s - [%s]\n", nread, strerror(crt_errno), buf);
+        free(buf);
         crt_exit(NULL);
     }
     buf[i + 1] = '\0';
@@ -97,7 +98,7 @@ server(void)
         exit(-1);
     }
 
-    for ( ; ; )
+    for (int i=0; i<1000 * 1000; i++)
     {
         struct sockaddr_in client_addr;
         socklen_t len = sizeof(client_addr);
@@ -113,6 +114,9 @@ main(void)
 {
     init_coroutine_env();
     server();
+    sleep(1);
+    destroy_coroutine_env();
+
     return 0;
 }
 

@@ -630,7 +630,7 @@ check_coroutine(void)
 void
 test_destroy_coroutine_env(void)
 {
-    int ret;
+    int ret = 0;
     ret = destroy_coroutine_env();
     CU_ASSERT(ret == 0);
 
