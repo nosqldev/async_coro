@@ -1,4 +1,4 @@
-all: ev.o acoro.o echo_server echo_client infinite_connector
+all: ev.o acoro.o echo_server echo_client infinite_connector chat_server
 
 ev.o:
 	cc -g -c vendor/ev.c -o example/ev.o
@@ -15,5 +15,8 @@ echo_client:
 infinite_connector:
 	cc -Wall -Wextra -std=c99 -g -D_GNU_SOURCE example/infinite_connector.c example/acoro.o example/ev.o -o example/infinite_connector -Isrc -Ivendor/ -lpthread -lm
 
+chat_server:
+	cc -Wall -Wextra -std=c99 -g -D_GNU_SOURCE example/chat_server.c example/acoro.o example/ev.o -o example/chat_server -Isrc -Ivendor/ -lpthread -lm
+
 clean:
-	- rm -f src/*.o ev/ev.o example/echo_server example/*.o example/core.* example/echo_client example/infinite_connector
+	- rm -f src/*.o ev/ev.o example/echo_server example/*.o example/core.* example/echo_client example/infinite_connector example/chat_server

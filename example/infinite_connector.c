@@ -29,6 +29,7 @@ connector(void *arg)
     int id = (intptr_t)arg;
     char buf[2048] = {0};
     size_t len;
+    ssize_t nread;
 
     snprintf(buf, sizeof buf, header, rand(), rand());
     buf[sizeof buf - 1] = '\0';
@@ -55,7 +56,8 @@ connector(void *arg)
 
     printf("%d written successfully\n", id);
 
-    ssize_t nread = crt_tcp_read(fd, buf, 10);
+loop:
+    nread = crt_tcp_read(fd, buf, 20);
     if (nread < 0)
     {
         printf("nread = %zd, err = %s\n", nread, strerror(crt_errno));
@@ -63,7 +65,15 @@ connector(void *arg)
     }
     buf[nread] = '\0';
 
-    printf("[%d] got(%zd): %s\n", id, nread, buf);
+    if (strstr(buf, "token") == NULL)
+    {
+        printf("[%d] got heartbeat(%zd): %s\n", id, nread, buf);
+        goto loop;
+    }
+    else
+    {
+        printf("[%d] got message: %s\n", id, buf);
+    }
 
     crt_sock_close(fd);
 

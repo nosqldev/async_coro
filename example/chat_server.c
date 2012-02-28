@@ -1,68 +1,82 @@
 /* © Copyright 2012 jingmi. All Rights Reserved.
  *
  * +----------------------------------------------------------------------+
- * | echo server: it will accept 1000000 connections then exit            |
+ * | char server                                                          |
  * +----------------------------------------------------------------------+
  * | Author: nosqldev@gmail.com                                           |
  * +----------------------------------------------------------------------+
- * | Created: 2012-02-23 23:11                                            |
+ * | Created: 2012-02-28 18:46                                            |
  * +----------------------------------------------------------------------+
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <string.h>
-#include <strings.h>
-#include <errno.h>
 
 #include "acoro.h"
 
 #define PORT (2000)
-#define MAX_BUF_LEN (1024 * 1024)
 
-static volatile uint64_t conn_cnt = 0;
+static char chat_client_fd[1024 * 1024] = {0};
 
 void *
-echo_func(void *arg)
+chat_server_func(void *arg)
 {
-    char *buf;
-    ssize_t nread;
-
     int fd = (uintptr_t)arg;
-    buf = malloc(MAX_BUF_LEN);
+    char buf[1024];
+    char c;
+    int chat_client_id;
+    int cnt;
+
+    chat_client_fd[fd] = 1;
+    printf("new connection, fd = %d\n", fd);
     crt_set_nonblock(fd);
 
-    uint64_t cnt = __sync_fetch_and_add(&conn_cnt, 1);
-    int i;
-    for (i=0; i<MAX_BUF_LEN-1; i++)
+go:
+    cnt = 0;
+    chat_client_id = 0;
+    for ( ; ; )
     {
-        nread = crt_tcp_read_to(fd, &buf[i], 1, 1000 * 5);
-        if (nread != 1)
+        ssize_t nread = crt_tcp_read(fd, &c, 1);
+        if (nread == 1)
+        {
+            buf[cnt++] = c;
+        }
+        else if (nread <= 0)
+        {
+            printf("connect closed, fd = %d\n", fd);
+            chat_client_fd[fd] = 0; /* actually, not thread-safe here */
+            crt_sock_close(fd);
+            crt_exit(NULL);
+        }
+        else
+        {
+            abort();
+        }
+        if ((c == '\n') || (cnt == sizeof buf - 1))
+        {
+            if (cnt == 1)
+                goto go;
+            buf[cnt-1] = '\0';
+            printf("got `%s' from fd[%d]\n", buf, fd);
+            buf[cnt-1] = '\n';
+            buf[cnt] = '\0';
+            sscanf(buf, "%d", &chat_client_id);
             break;
-        if (buf[i] == '\n')
-            break;
+        }
     }
-    buf[i+1] = '\0';
-    /*printf("nread = %zd\n", nread);*/
-    if (nread != 1)
-    {
-        crt_sock_close(fd);
-        printf("err(%zd): %s - [%s]\n", nread, strerror(crt_errno), buf);
-        free(buf);
-        crt_exit(NULL);
-    }
-    buf[i + 1] = '\0';
-    ssize_t nwrite = crt_tcp_write(fd, &buf[0], strlen(buf));
-    buf[ strlen(buf) - 1 ] = '\0';
-    printf("[%lu] read: %d, write: %zd, [%s]\n", cnt, i+1, nwrite, buf);
 
-    free(buf);
-    close(fd);
+    printf("chat_client_id = %d\n", chat_client_id);
+    if (chat_client_fd[chat_client_id] == 1)
+    {
+        crt_tcp_write(chat_client_id, buf, strlen(buf));
+    }
+    else
+    {
+        crt_tcp_write(fd, "not online\n", 11);
+    }
+    goto go;
 
     crt_exit(NULL);
 }
@@ -98,12 +112,12 @@ server(void)
         exit(-1);
     }
 
-    for (int i=0; i<1000 * 1000; i++)
+    for ( ; ; )
     {
         struct sockaddr_in client_addr;
         socklen_t len = sizeof(client_addr);
         int fd = accept(listenfd, (struct sockaddr *)&client_addr, &len);
-        crt_create(NULL, NULL, echo_func, (void*)(uintptr_t)fd);
+        crt_create(NULL, NULL, chat_server_func, (void*)(uintptr_t)fd);
     }
 
     return 0;
@@ -114,10 +128,9 @@ main(void)
 {
     init_coroutine_env();
     server();
-    sleep(1);
-    destroy_coroutine_env();
 
     return 0;
 }
 
+/*sheng mei*/
 /* vim: set expandtab tabstop=4 shiftwidth=4 foldmethod=marker: */
