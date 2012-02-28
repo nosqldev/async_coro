@@ -10,6 +10,7 @@
  */
 
 /* TODO:
+ * 0. Fix CurrLoop bug!!!
  * 1. timeout connect
  * 2. mutiple manager_sem
  * 3. sleep
@@ -92,6 +93,8 @@ enum action_t
 
     act_tcp_blocked_connect,
     act_tcp_blocked_connect_done,
+    act_tcp_timeout_connect,
+    act_tcp_timeout_connect_done,
 
     act_usleep, /* TODO */
 };
@@ -125,6 +128,7 @@ struct connect_arg_s
 
     in_addr_t ip;
     in_port_t port;
+    int fd;
 };
 
 union args_u
@@ -262,6 +266,13 @@ loop:
             break;
 
         case act_tcp_blocked_connect_done:
+            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
+            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
+            if (task_ptr->action == act_finished_coroutine)
+                goto loop;
+            break;
+
+        case act_tcp_timeout_connect_done:
             coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
             swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
             if (task_ptr->action == act_finished_coroutine)
@@ -556,6 +567,7 @@ do_tcp_blocked_connect(list_item_ptr(task_queue) task_ptr)
 
     arg = &task_ptr->args.connect_arg;
 
+    flag = 1;
     sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sockfd < 0)
     {
@@ -598,6 +610,142 @@ do_tcp_blocked_connect(list_item_ptr(task_queue) task_ptr)
     crt_set_nonblock(sockfd);
     task_ptr->action = act_tcp_blocked_connect_done;
 
+    return 0;
+}
+
+static int
+ev_sock_connect_stop(struct ev_loop *loop, list_item_ptr(task_queue) task_ptr, int retval, int err_code)
+{
+    ev_io_stop(loop, &task_ptr->ec.sock_watcher);
+    if (task_ptr->args.connect_arg.timeout_ms != 0)
+        ev_timer_stop(loop, &task_ptr->ec.sock_timer);
+    task_ptr->ret.val = retval;
+    task_ptr->ret.err_code = err_code;
+    task_ptr->action = act_tcp_timeout_connect_done;
+    coroutine_notify_manager(task_ptr);
+
+    return 0;
+}
+
+static void
+ev_sock_connect_timeout(struct ev_loop *loop, ev_timer *timer_w, int event)
+{
+    list_item_ptr(task_queue) task_ptr;
+
+    assert(event == EV_TIMEOUT);
+    task_ptr = TIMER_WATCHER_REF_TASKPTR(timer_w);
+    ev_sock_connect_stop(loop, task_ptr, -1, EWOULDBLOCK);
+}
+
+static void
+ev_sock_connect(struct ev_loop *loop, ev_io *io_w, int event)
+{
+    list_item_ptr(task_queue) task_ptr;
+    struct connect_arg_s *arg;
+    socklen_t len;
+    int ret;
+
+    ret = 0;
+    len = sizeof ret;
+    assert((event == EV_READ) || (event == EV_WRITE));
+    task_ptr = IO_WATCHER_REF_TASKPTR(io_w);
+    arg = &task_ptr->args.connect_arg;
+    assert(task_ptr->action = act_tcp_timeout_connect);
+    if (getsockopt(arg->fd, SOL_SOCKET, SO_ERROR, &ret, &len) < 0)
+    {
+        close(arg->fd);
+        ev_sock_connect_stop(loop, task_ptr, -1, errno);
+        return;
+    }
+    if (ret != 0)
+    {
+        close(arg->fd);
+        ev_sock_connect_stop(loop, task_ptr, -1, errno);
+        return;
+    }
+
+    /* connect successfully */
+    ev_sock_connect_stop(loop, task_ptr, arg->fd, 0);
+}
+
+static int
+do_tcp_timeout_connect(list_item_ptr(task_queue) task_ptr)
+{
+    struct connect_arg_s *arg;
+    int ret;
+    int sockfd;
+    struct sockaddr_in server_addr;
+    int flag;
+
+    arg = &task_ptr->args.connect_arg;
+
+    flag = 1;
+    sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sockfd < 0)
+    {
+        task_ptr->ret.val = sockfd;
+        task_ptr->ret.err_code = errno;
+        task_ptr->action = act_tcp_timeout_connect_done;
+
+        goto done;
+    }
+    ret = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof flag);
+    if (ret < 0)
+    {
+        close(sockfd);
+        task_ptr->ret.val = ret;
+        task_ptr->ret.err_code = errno;
+        task_ptr->action = act_tcp_timeout_connect_done;
+
+        goto done;
+    }
+    crt_set_nonblock(sockfd);
+
+    memset(&server_addr, 0, sizeof server_addr);
+    server_addr.sin_addr.s_addr = arg->ip;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = arg->port;
+
+    ret = connect(sockfd, (struct sockaddr*)&server_addr, sizeof server_addr);
+    if (ret < 0)
+    {
+        if (errno != EINPROGRESS)
+        {
+            close(sockfd);
+            task_ptr->ret.val = ret;
+            task_ptr->ret.err_code = errno;
+            goto done;
+        }
+    }
+    else if (ret == 0)
+    {
+        /* connected immediately */
+        task_ptr->ret.val = sockfd;
+        task_ptr->ret.err_code = 0;
+        goto done;
+    }
+    else
+    {
+        /* should never reach here */
+        abort();
+    }
+
+    /* connecting */
+    arg->fd = sockfd;
+    ev_io_init(&task_ptr->ec.sock_watcher, ev_sock_connect, arg->fd, EV_READ | EV_WRITE);
+    ev_io_start(CurrLoop, &task_ptr->ec.sock_watcher);
+    if (arg->timeout_ms != 0)
+    {
+        ev_timer_init(&task_ptr->ec.sock_timer, ev_sock_connect_timeout, arg->timeout_ms * 1.0 / 1000, 0.);
+        ev_timer_start(CurrLoop, &task_ptr->ec.sock_timer);
+    }
+    goto leave;
+
+done:
+    task_ptr->action = act_tcp_timeout_connect_done;
+    coroutine_notify_manager(task_ptr);
+
+leave:
     return 0;
 }
 
@@ -645,6 +793,11 @@ do_task(list_item_ptr(task_queue) task_ptr)
     case act_tcp_blocked_connect:
         do_tcp_blocked_connect(task_ptr);
         retval = 0;
+        break;
+
+    case act_tcp_timeout_connect:
+        do_tcp_timeout_connect(task_ptr);
+        retval = 1;
         break;
 
     default:
@@ -799,7 +952,10 @@ coroutine_set_sock_connect(in_addr_t ip, in_port_t port, int msec)
     list_item_ptr(task_queue) task_ptr;
 
     task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
-    task_ptr->action = act_tcp_blocked_connect;
+    if (msec == -1)
+        task_ptr->action = act_tcp_blocked_connect;
+    else
+        task_ptr->action = act_tcp_timeout_connect;
     task_ptr->args.connect_arg.ip = ip;
     task_ptr->args.connect_arg.port = port;
     task_ptr->args.connect_arg.timeout_ms = msec;

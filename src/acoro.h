@@ -162,9 +162,24 @@ int crt_get_err_code();
 
 /* }}} */
 /* {{{ int      crt_tcp_blocked_connect(in_addr_t ip, in_port_t port) */
+/* this will return nonblocking fd */
 
 #define crt_tcp_blocked_connect(ip, port) ({                    \
-    coroutine_set_sock_connect(ip, port, 0);                    \
+    coroutine_set_sock_connect(ip, port, -1);                   \
+    coroutine_notify_background_worker();                       \
+    ucontext_t *manager_context, *task_context;                 \
+    coroutine_get_context(&manager_context, &task_context);     \
+    swapcontext(task_context, manager_context);                 \
+    int retval = coroutine_get_retval();                        \
+    retval;                                                     \
+})
+
+/* }}} */
+/* {{{ int      crt_tcp_timeout_connect(in_addr_t ip, in_port_t port, int msec) */
+/* this will return nonblocking fd */
+
+#define crt_tcp_timeout_connect(ip, port, msec) ({              \
+    coroutine_set_sock_connect(ip, port, msec);                 \
     coroutine_notify_background_worker();                       \
     ucontext_t *manager_context, *task_context;                 \
     coroutine_get_context(&manager_context, &task_context);     \

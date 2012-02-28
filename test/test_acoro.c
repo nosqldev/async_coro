@@ -540,6 +540,39 @@ test_tcp_blocked_connect(void)
     pthread_join(tid, NULL);
 }
 
+static void *
+tcp_timeout_connect(void *arg)
+{
+    (void)arg;
+    int fd;
+
+    fd = crt_tcp_timeout_connect(inet_addr("127.0.0.1"), htons(2000), 100);
+    CU_ASSERT(fd > 0);
+
+    char buf[1024];
+    CU_ASSERT(crt_tcp_read(fd, buf, 6) == 6);
+    CU_ASSERT(strcmp(buf, "abcabc") == 0);
+
+    crt_sock_close(fd);
+
+    crt_exit(NULL);
+}
+
+void
+test_tcp_timeout_connect(void)
+{
+    pthread_t tid;
+    pthread_create(&tid, NULL, dummy_write_server, NULL);
+    sched_yield();
+    usleep(1000);
+
+    crt_create(NULL, NULL, tcp_timeout_connect, NULL);
+
+    usleep(20 * 1000);
+    CU_ASSERT(coroutine_env.info.ran == 10);
+    pthread_join(tid, NULL);
+}
+
 int
 check_coroutine(void)
 {
@@ -618,6 +651,13 @@ check_coroutine(void)
     /* }}} */
     /* {{{ CU_add_test: test_tcp_blocked_connect */
     if (CU_add_test(pSuite, "test_tcp_blocked_connect", test_tcp_blocked_connect) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_tcp_timeout_connect */
+    if (CU_add_test(pSuite, "test_tcp_timeout_connect", test_tcp_timeout_connect) == NULL)
     {
         CU_cleanup_registry();
         return CU_get_error();
