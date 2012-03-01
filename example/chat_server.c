@@ -87,6 +87,7 @@ server(void)
     struct sockaddr_in server_addr;
     int listenfd;
     int flag;
+    coroutine_attr_t attr;
 
     listenfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listenfd < 0)
@@ -111,13 +112,14 @@ server(void)
         perror("listen()");
         exit(-1);
     }
+    crt_attr_setstacksize(&attr, 1024 * 128);
 
     for ( ; ; )
     {
         struct sockaddr_in client_addr;
         socklen_t len = sizeof(client_addr);
         int fd = accept(listenfd, (struct sockaddr *)&client_addr, &len);
-        crt_create(NULL, NULL, chat_server_func, (void*)(uintptr_t)fd);
+        crt_create(NULL, &attr, chat_server_func, (void*)(uintptr_t)fd);
     }
 
     return 0;
@@ -132,5 +134,4 @@ main(void)
     return 0;
 }
 
-/*sheng mei*/
 /* vim: set expandtab tabstop=4 shiftwidth=4 foldmethod=marker: */

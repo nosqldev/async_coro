@@ -573,6 +573,15 @@ test_tcp_timeout_connect(void)
     pthread_join(tid, NULL);
 }
 
+void
+test_set_stacksize(void)
+{
+    coroutine_attr_t attr;
+
+    crt_attr_setstacksize(&attr, 1024);
+    CU_ASSERT(attr.stacksize == 1024);
+}
+
 int
 check_coroutine(void)
 {
@@ -658,6 +667,13 @@ check_coroutine(void)
     /* }}} */
     /* {{{ CU_add_test: test_tcp_timeout_connect */
     if (CU_add_test(pSuite, "test_tcp_timeout_connect", test_tcp_timeout_connect) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_set_stacksize */
+    if (CU_add_test(pSuite, "test_set_stacksize", test_set_stacksize) == NULL)
     {
         CU_cleanup_registry();
         return CU_get_error();

@@ -72,7 +72,6 @@
 
 /* TODO
  * 1. rename *sock* to *tcp*
- * 2. add tcp_connect
  */
 enum action_t
 {
@@ -225,7 +224,7 @@ loop:
             getcontext(&task_context);
             task_ptr->stack_ptr = acoro_malloc(task_ptr->args.init_arg.stack_size);
             task_context.uc_stack.ss_sp = task_ptr->stack_ptr;
-            task_context.uc_stack.ss_size = COROUTINE_STACK_SIZE;
+            task_context.uc_stack.ss_size = task_ptr->args.init_arg.stack_size;
             task_context.uc_link = &coroutine_env.manager_context;
             makecontext(&task_context,
                         (void(*)(void))task_ptr->args.init_arg.func,
@@ -1068,7 +1067,7 @@ int
 crt_create(coroutine_t *cid, const void * __restrict attr __attribute__((unused)),
                  begin_routine_t br, void * __restrict arg)
 {
-    /*TODO user can define stack size */
+    coroutine_attr_t *attr_ptr;
     list_item_new(task_queue, task_ptr);
 
     if (cid == NULL)
@@ -1078,12 +1077,28 @@ crt_create(coroutine_t *cid, const void * __restrict attr __attribute__((unused)
 
     task_ptr->action = act_new_coroutine;
     task_ptr->args.init_arg.func = br;
-    task_ptr->args.init_arg.stack_size = COROUTINE_STACK_SIZE;
     task_ptr->args.init_arg.func_arg = arg;
+    attr_ptr = (coroutine_attr_t *)attr;
+    if (attr_ptr != NULL)
+    {
+        if (attr_ptr->stacksize != 0)
+            task_ptr->args.init_arg.stack_size = attr_ptr->stacksize;
+    }
+    else
+    {
+        task_ptr->args.init_arg.stack_size = COROUTINE_STACK_SIZE;
+    }
 
     Push(todo_queue, task_ptr);
     sem_post(&coroutine_env.manager_sem[0]); /* TODO post to one manager by round robin */
 
+    return 0;
+}
+
+int
+crt_attr_setstacksize(coroutine_attr_t *attr, size_t stacksize)
+{
+    attr->stacksize = stacksize;
     return 0;
 }
 
