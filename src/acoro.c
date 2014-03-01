@@ -21,6 +21,7 @@
  * 2014-03-01
  * 1. Add logger thread
  * 2. Add feature: switch current context to background in user's corotine
+ * 3. join method
  */
 
 /* {{{ include header files */
