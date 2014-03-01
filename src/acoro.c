@@ -14,6 +14,13 @@
  * 1. timeout connect
  * 2. mutiple manager_sem
  * 3. sleep
+ *
+ * 2013-12-27
+ * 1. Separated thread for disk & sock IO
+ *
+ * 2014-03-01
+ * 1. Add logger thread
+ * 2. Add feature: switch current context to background in user's corotine
  */
 
 /* {{{ include header files */
@@ -1079,10 +1086,9 @@ crt_create(coroutine_t *cid, const void * __restrict attr __attribute__((unused)
     task_ptr->args.init_arg.func = br;
     task_ptr->args.init_arg.func_arg = arg;
     attr_ptr = (coroutine_attr_t *)attr;
-    if (attr_ptr != NULL)
+    if ((attr_ptr != NULL) && (attr_ptr->stacksize != 0))
     {
-        if (attr_ptr->stacksize != 0)
-            task_ptr->args.init_arg.stack_size = attr_ptr->stacksize;
+        task_ptr->args.init_arg.stack_size = attr_ptr->stacksize;
     }
     else
     {

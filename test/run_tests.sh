@@ -70,7 +70,7 @@ compile_obj "acoro"
 
 gputs "\ncompile test suits"
 printf "\033[01;31;40m" # red
-cc -Wall -Wextra -g -std=gnu99 -D_GNU_SOURCE -lpthread -lcunit -lm -I../src -I../vendor test_acoro.c ev.o -o test_acoro
+cc -Wall -Wextra -g -std=gnu99 -D_GNU_SOURCE -I../src -I../vendor test_acoro.c ev.o -o test_acoro -lpthread -lcunit -lm
 printf "\033[00m"
 
 run_ts "./test_acoro" del
