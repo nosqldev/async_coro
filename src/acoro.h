@@ -51,7 +51,7 @@ int crt_attr_setstacksize(coroutine_attr_t *attr, size_t stacksize);
 int crt_set_nonblock(int fd);
 int crt_set_block(int fd);
 int crt_get_err_code();
-int crt_msleep(uint64_t usec);
+int crt_msleep(uint64_t msec);
 
 /* {{{ void     crt_exit(void *) */
 
