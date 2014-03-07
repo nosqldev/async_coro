@@ -19,6 +19,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <sys/time.h>
+#include <inttypes.h>
 
 /* include acoro.c directly instead of link, so that can share structures,
  * global variables, functions and so on.
@@ -505,8 +506,12 @@ test_sock_write(void)
     usleep(1000);
 
     crt_create(NULL, NULL, sock_write, NULL);
-    usleep(1000);
+    usleep(10000);
     CU_ASSERT(coroutine_env.info.ran == 8);
+    if (coroutine_env.info.ran != 8)
+    {
+        printf("\n[coroutine_env.info.ran] = %" PRIu64 "\n", coroutine_env.info.ran);
+    }
 
     pthread_join(tid, NULL);
 }
@@ -580,6 +585,56 @@ test_set_stacksize(void)
 
     crt_attr_setstacksize(&attr, 1024);
     CU_ASSERT(attr.stacksize == 1024);
+}
+
+void *
+msleep_func(void *arg)
+{
+    (void)arg;
+    struct timeval start, end, used;
+    int msleep_retval;
+
+    gettimeofday(&start, NULL);
+    msleep_retval = crt_msleep(10);
+    gettimeofday(&end, NULL);
+    (&used)->tv_sec = (&end)->tv_sec - (&start)->tv_sec;
+    (&used)->tv_usec = (&end)->tv_usec - (&start)->tv_usec;
+    if ((&used)->tv_usec < 0){
+        (&used)->tv_sec --;
+        (&used)->tv_usec += 1000000;
+    }
+    CU_ASSERT(msleep_retval == 0);
+    CU_ASSERT(used.tv_sec == 0);
+    CU_ASSERT(used.tv_usec <= 1000 * 11);
+    CU_ASSERT(used.tv_usec >= 1000 * 9);
+
+    gettimeofday(&start, NULL);
+    msleep_retval = crt_msleep(100);
+    gettimeofday(&end, NULL);
+    (&used)->tv_sec = (&end)->tv_sec - (&start)->tv_sec;
+    (&used)->tv_usec = (&end)->tv_usec - (&start)->tv_usec;
+    if ((&used)->tv_usec < 0){
+        (&used)->tv_sec --;
+        (&used)->tv_usec += 1000000;
+    }
+    CU_ASSERT(msleep_retval == 0);
+    CU_ASSERT(used.tv_sec == 0);
+    CU_ASSERT(used.tv_usec <= 1000 * 102);
+    CU_ASSERT(used.tv_usec >= 1000 * 99);
+
+    CU_ASSERT(crt_msleep(0) == -1);
+
+    crt_exit(NULL);
+}
+
+void
+test_msleep(void)
+{
+    crt_create(NULL, NULL, msleep_func, NULL);
+    usleep(200 * 1000); /* 200 ms */
+
+    CU_ASSERT(coroutine_env.info.cid == 11);
+    CU_ASSERT(coroutine_env.info.ran == 11);
 }
 
 int
@@ -674,6 +729,13 @@ check_coroutine(void)
     /* }}} */
     /* {{{ CU_add_test: test_set_stacksize */
     if (CU_add_test(pSuite, "test_set_stacksize", test_set_stacksize) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_msleep */
+    if (CU_add_test(pSuite, "test_msleep", test_msleep) == NULL)
     {
         CU_cleanup_registry();
         return CU_get_error();

@@ -103,7 +103,8 @@ enum action_t
     act_tcp_timeout_connect,
     act_tcp_timeout_connect_done,
 
-    act_usleep, /* TODO */
+    act_msleep,
+    act_msleep_done,
 };
 
 struct init_arg_s
@@ -138,12 +139,24 @@ struct connect_arg_s
     int fd;
 };
 
+/**
+ * @brief Design for general purpose
+ */
+struct general_arg_s
+{
+    uint32_t u32;
+    float    f;
+    uint64_t u64;
+    double   d;
+};
+
 union args_u
 {
     struct init_arg_s init_arg;
     struct open_arg_s open_arg;
     struct io_arg_s io_arg;
     struct connect_arg_s connect_arg;
+    struct general_arg_s general_arg;
 };
 
 struct ev_controller_s
@@ -219,8 +232,10 @@ new_manager(void *arg)
 
     for ( ; ; )
     {
+        assert(g_thread_id == 0); /* incorrect when we have more than 1 manager threads */
         sem_wait(&coroutine_env.manager_sem[g_thread_id]);
         Shift(todo_queue, task_ptr);
+        assert(task_ptr != NULL);
         if (task_ptr == NULL)
             continue; /* should never reach here */
 
@@ -280,6 +295,13 @@ loop:
             break;
 
         case act_tcp_timeout_connect_done:
+            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
+            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
+            if (task_ptr->action == act_finished_coroutine)
+                goto loop;
+            break;
+
+        case act_msleep_done:
             coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
             swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
             if (task_ptr->action == act_finished_coroutine)
@@ -756,6 +778,33 @@ leave:
     return 0;
 }
 
+static void
+timer_timeout(struct ev_loop *loop, ev_timer *timer_w, int event)
+{
+    list_item_ptr(task_queue) task_ptr;
+
+    assert(event == EV_TIMEOUT);
+    task_ptr = TIMER_WATCHER_REF_TASKPTR(timer_w);
+    ev_timer_stop(loop, &task_ptr->ec.sock_timer);
+    task_ptr->ret.val = 0;
+    task_ptr->ret.err_code = 0;
+    task_ptr->action = act_msleep_done;
+
+    coroutine_notify_manager(task_ptr);
+}
+
+static int
+do_msleep(list_item_ptr(task_queue) task_ptr)
+{
+    struct general_arg_s *arg;
+
+    arg = &task_ptr->args.general_arg;
+    ev_timer_init(&task_ptr->ec.sock_timer, timer_timeout, arg->u64 * 1.0 /  1000, 0.);
+    ev_timer_start(CurrLoop, &task_ptr->ec.sock_timer);
+
+    return 0;
+}
+
 /**
  * @brief Do task in background worker thread
  *
@@ -804,6 +853,11 @@ do_task(list_item_ptr(task_queue) task_ptr)
 
     case act_tcp_timeout_connect:
         do_tcp_timeout_connect(task_ptr);
+        retval = 1;
+        break;
+
+    case act_msleep:
+        do_msleep(task_ptr);
         retval = 1;
         break;
 
@@ -975,6 +1029,7 @@ coroutine_notify_background_worker(void)
     ssize_t nwrite;
     uint64_t bg_worker_id;
 
+    assert(g_thread_id == 0);
     c = 0xee;
     Push(doing_queue, coroutine_env.curr_task_ptr[ g_thread_id ]);
     bg_worker_id = __sync_fetch_and_add(&coroutine_env.info.bg_worker_id, 1) % BACKGROUND_WORKER_CNT;
@@ -1146,6 +1201,29 @@ crt_set_block(int fd)
     return ret;
 }
 
+int
+crt_msleep(uint64_t msec)
+{
+    int ret;
+    list_item_ptr(task_queue) task_ptr;
+
+    ret = -1;
+    if (msec != 0)
+    {
+        task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
+        task_ptr->action = act_msleep;
+        task_ptr->args.general_arg.u64 = msec;
+        coroutine_notify_background_worker();
+
+        ucontext_t *manager_context, *task_context;
+        coroutine_get_context(&manager_context, &task_context);
+        swapcontext(task_context, manager_context);
+
+        ret = coroutine_get_retval();
+    }
+
+    return ret;
+}
 
 /* }}} */
 

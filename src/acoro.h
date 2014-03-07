@@ -51,6 +51,7 @@ int crt_attr_setstacksize(coroutine_attr_t *attr, size_t stacksize);
 int crt_set_nonblock(int fd);
 int crt_set_block(int fd);
 int crt_get_err_code();
+int crt_msleep(uint64_t usec);
 
 /* {{{ void     crt_exit(void *) */
 
@@ -198,6 +199,20 @@ int crt_get_err_code();
     retval;                                                     \
 })
 
+/* }}} */
+/* {{{ int      crt_pthread_mutex_lock(pthread_mutex_t *mutex) */
+
+#define crt_pthread_mutex_lock(mutex) ({                        \
+    (void)mutex;                                                \
+    0;                                                          \
+})
+/* }}} */
+/* {{{ int      crt_pthread_mutex_unlock(pthread_mutex_t *mutex) */
+
+#define crt_pthread_mutex_unlock(mutex) ({                        \
+    (void)mutex;                                                \
+    0;                                                          \
+})
 /* }}} */
 
 #endif /* ! _ACORO_H_ */
