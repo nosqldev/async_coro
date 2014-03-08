@@ -1259,7 +1259,7 @@ crt_msleep(uint64_t msec)
 
 /**
  * @brief Run a routine in background thread without order restriction.
- *        NOTE that all crt_*() are not allowd in bg_routine
+ *        NOTE that all crt_*() are *NOT* allowd in bg_routine
  */
 int
 crt_bg_run(bg_routine_t bg_routine, void *arg, void *result)
