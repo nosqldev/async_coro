@@ -638,6 +638,18 @@ test_msleep(void)
 }
 
 int
+do_large_job_in_bg_worker(void *arg, void *result)
+{
+    (void)arg;
+    pthread_t *ptr = result;
+
+    *ptr = pthread_self();
+    usleep(20 * 1000);
+
+    return 0x123;
+}
+
+int
 fetch_bg_thread_id(void *arg, void *result)
 {
     (void)arg;
@@ -645,23 +657,44 @@ fetch_bg_thread_id(void *arg, void *result)
 
     *ptr = pthread_self();
 
-    return 0;
+    return 100;
 }
 
 void *
 bg_run_main_func(void *arg)
 {
     int write_fd = *(int*)arg;
-    pthread_t tid;
+    pthread_t tid, tid2;
     pthread_t self_tid = pthread_self();
+    struct timeval start, end, used;
 
-    crt_bg_run(fetch_bg_thread_id, NULL, &tid);
+    int ret = crt_bg_run(fetch_bg_thread_id, NULL, &tid);
 
+    CU_ASSERT(ret == 100);
     CU_ASSERT(memcmp(&tid, &self_tid, sizeof tid) != 0);
 
     char buf[16] = {0};
     memcpy(&buf[0], &tid, 8);
     memcpy(&buf[8], &self_tid, 8);
+
+    gettimeofday(&start, NULL);
+    ret = crt_bg_run(do_large_job_in_bg_worker, NULL, &tid2);
+    gettimeofday(&end, NULL);
+
+    (&used)->tv_sec = (&end)->tv_sec - (&start)->tv_sec;
+    (&used)->tv_usec = (&end)->tv_usec - (&start)->tv_usec;
+    if ((&used)->tv_usec < 0)
+    {
+        (&used)->tv_sec --;
+        (&used)->tv_usec += 1000000;
+    }
+
+    CU_ASSERT(ret == 0x123);
+    CU_ASSERT(memcmp(&tid, &tid2, sizeof tid));
+    CU_ASSERT(memcmp(&self_tid, &tid2, sizeof tid));
+    CU_ASSERT(used.tv_sec == 0);
+    CU_ASSERT(used.tv_usec <= 1000 * 22);
+    CU_ASSERT(used.tv_usec >= 1000 * 19);
 
     crt_disk_write(write_fd, buf, sizeof buf);
     crt_exit(NULL);
