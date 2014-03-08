@@ -224,7 +224,6 @@ static void *
 new_manager(void *arg)
 {
     list_item_ptr(task_queue) task_ptr;
-    ucontext_t task_context;
 
     g_thread_id = (intptr_t)arg;
 
@@ -242,17 +241,17 @@ loop:
         {
         case act_new_coroutine:
             getcontext(&coroutine_env.manager_context);
-            getcontext(&task_context);
+            getcontext(&task_ptr->task_context);
             task_ptr->stack_ptr = acoro_malloc(task_ptr->args.init_arg.stack_size);
-            task_context.uc_stack.ss_sp = task_ptr->stack_ptr;
-            task_context.uc_stack.ss_size = task_ptr->args.init_arg.stack_size;
-            task_context.uc_link = &coroutine_env.manager_context;
-            makecontext(&task_context,
+            task_ptr->task_context.uc_stack.ss_sp = task_ptr->stack_ptr;
+            task_ptr->task_context.uc_stack.ss_size = task_ptr->args.init_arg.stack_size;
+            task_ptr->task_context.uc_link = &coroutine_env.manager_context;
+            makecontext(&task_ptr->task_context,
                         (void(*)(void))task_ptr->args.init_arg.func,
                         1,
                         task_ptr->args.init_arg.func_arg);
             coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
-            swapcontext(&coroutine_env.manager_context, &task_context);
+            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
             if (task_ptr->action == act_finished_coroutine)
                 goto loop;
             break;
