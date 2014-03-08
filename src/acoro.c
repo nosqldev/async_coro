@@ -20,7 +20,7 @@
  *
  * 2014-03-01
  * 1. Add logger thread
- * 2. Add feature: switch current context to background in user's corotine
+ * 2. Add feature: switch current context to background in user's coroutine
  * 3. join method
  */
 
@@ -209,10 +209,8 @@ struct coroutine_env_s
         ev_io watcher;
     } worker_ev[BACKGROUND_WORKER_CNT];
 
-    list_head_ptr(task_queue) timer_queue;
     list_head_ptr(task_queue) todo_queue;
     list_head_ptr(task_queue) doing_queue;
-    list_head_ptr(task_queue) done_queue;
 };
 
 /* }}} */
@@ -1055,14 +1053,10 @@ init_coroutine_env()
 
     memset(&coroutine_env, 0, sizeof coroutine_env);
 
-    list_new(task_queue, timer_queue);
-    coroutine_env.timer_queue = timer_queue;
     list_new(task_queue, todo_queue);
     coroutine_env.todo_queue = todo_queue;
     list_new(task_queue, doing_queue);
     coroutine_env.doing_queue = doing_queue;
-    list_new(task_queue, done_queue);
-    coroutine_env.done_queue = done_queue;
 
     for (int i=0; i<MANAGER_CNT; i++)
     {
@@ -1093,10 +1087,8 @@ init_coroutine_env()
 int
 destroy_coroutine_env()
 {
-    list_destroy(coroutine_env.timer_queue);
     list_destroy(coroutine_env.todo_queue);
     list_destroy(coroutine_env.doing_queue);
-    list_destroy(coroutine_env.done_queue);
     for (int i=0; i<MANAGER_CNT; i++)
     {
         pthread_cancel(coroutine_env.manager_tid[i]);

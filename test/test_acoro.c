@@ -38,10 +38,8 @@ test_init_coroutine_env(void)
     ret = init_coroutine_env();
 
     CU_ASSERT(ret == 0);
-    CU_ASSERT(coroutine_env.timer_queue != NULL);
     CU_ASSERT(coroutine_env.todo_queue  != NULL);
     CU_ASSERT(coroutine_env.doing_queue != NULL);
-    CU_ASSERT(coroutine_env.done_queue  != NULL);
 
     for (int i=0; i<BACKGROUND_WORKER_CNT*2; i++)
     {
