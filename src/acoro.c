@@ -105,11 +105,14 @@ enum action_t
 
     act_msleep,
     act_msleep_done,
+
+    act_bg_run,
+    act_bg_run_done,
 };
 
 struct init_arg_s
 {
-    begin_routine_t func;
+    launch_routine_t func;
     size_t stack_size;
     void *func_arg;
 };
@@ -148,6 +151,14 @@ struct general_arg_s
     float    f;
     uint64_t u64;
     double   d;
+    void *   ptr;
+};
+
+struct routine_arg_s
+{
+    bg_routine_t func;
+    void *arg;
+    void *result;
 };
 
 union args_u
@@ -157,6 +168,7 @@ union args_u
     struct io_arg_s io_arg;
     struct connect_arg_s connect_arg;
     struct general_arg_s general_arg;
+    struct routine_arg_s routine_arg;
 };
 
 struct ev_controller_s
@@ -299,6 +311,13 @@ loop:
             break;
 
         case act_msleep_done:
+            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
+            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
+            if (task_ptr->action == act_finished_coroutine)
+                goto loop;
+            break;
+
+        case act_bg_run_done:
             coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
             swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
             if (task_ptr->action == act_finished_coroutine)
@@ -802,6 +821,23 @@ do_msleep(list_item_ptr(task_queue) task_ptr)
     return 0;
 }
 
+static int
+do_bg_run(list_item_ptr(task_queue) task_ptr)
+{
+    struct routine_arg_s *arg;
+    int retval;
+
+    arg = &task_ptr->args.routine_arg;
+    retval = (arg->func)(arg->arg, arg->result);
+    task_ptr->ret.val = retval;
+    task_ptr->ret.err_code = 0;
+    task_ptr->action = act_bg_run_done;
+
+    coroutine_notify_manager(task_ptr);
+
+    return 0;
+}
+
 /**
  * @brief Do task in background worker thread
  *
@@ -855,6 +891,11 @@ do_task(list_item_ptr(task_queue) task_ptr)
 
     case act_msleep:
         do_msleep(task_ptr);
+        retval = 1;
+        break;
+
+    case act_bg_run:
+        do_bg_run(task_ptr);
         retval = 1;
         break;
 
@@ -942,7 +983,7 @@ coroutine_set_disk_open(const char *pathname, int flags, ...)
     task_ptr->action = act_disk_open;
     task_ptr->args.open_arg.pathname = pathname;
     task_ptr->args.open_arg.flags = flags;
-    if (flags | O_CREAT)
+    if (flags | O_CREAT) // XXX: should it be `&' instead of `|' ?
     {
         va_start(ap, flags);
         task_ptr->args.open_arg.mode = va_arg(ap, mode_t);
@@ -1119,7 +1160,7 @@ crt_get_err_code()
 
 int
 crt_create(coroutine_t *cid, const void * __restrict attr __attribute__((unused)),
-                 begin_routine_t br, void * __restrict arg)
+           launch_routine_t br, void * __restrict arg)
 {
     coroutine_attr_t *attr_ptr;
     list_item_new(task_queue, task_ptr);
@@ -1208,10 +1249,35 @@ crt_msleep(uint64_t msec)
 
         ucontext_t *manager_context, *task_context;
         coroutine_get_context(&manager_context, &task_context);
-        swapcontext(task_context, manager_context);
+        swapcontext(task_context, manager_context); // goto manager contenxt in manager thread
 
         ret = coroutine_get_retval();
     }
+
+    return ret;
+}
+
+/**
+ * @brief Run a routine in background thread without order restriction.
+ *        NOTE that all crt_*() are not allowd in bg_routine
+ */
+int
+crt_bg_run(bg_routine_t bg_routine, void *arg, void *result)
+{
+    int ret;
+    list_item_ptr(task_queue) task_ptr;
+    ucontext_t *manager_context, *task_context;
+
+    task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
+    task_ptr->action = act_bg_run;
+    task_ptr->args.routine_arg.func = bg_routine;
+    task_ptr->args.routine_arg.arg = arg;
+    task_ptr->args.routine_arg.result = result;
+    coroutine_notify_background_worker();
+    coroutine_get_context(&manager_context, &task_context);
+    swapcontext(task_context, manager_context); // goto manager contenxt in manager thread
+
+    ret = coroutine_get_retval();
 
     return ret;
 }

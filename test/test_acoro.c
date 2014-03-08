@@ -597,13 +597,14 @@ msleep_func(void *arg)
     gettimeofday(&end, NULL);
     (&used)->tv_sec = (&end)->tv_sec - (&start)->tv_sec;
     (&used)->tv_usec = (&end)->tv_usec - (&start)->tv_usec;
-    if ((&used)->tv_usec < 0){
+    if ((&used)->tv_usec < 0)
+    {
         (&used)->tv_sec --;
         (&used)->tv_usec += 1000000;
     }
     CU_ASSERT(msleep_retval == 0);
     CU_ASSERT(used.tv_sec == 0);
-    CU_ASSERT(used.tv_usec <= 1000 * 11);
+    CU_ASSERT(used.tv_usec <= 1000 * 12);
     CU_ASSERT(used.tv_usec >= 1000 * 9);
 
     gettimeofday(&start, NULL);
@@ -611,7 +612,8 @@ msleep_func(void *arg)
     gettimeofday(&end, NULL);
     (&used)->tv_sec = (&end)->tv_sec - (&start)->tv_sec;
     (&used)->tv_usec = (&end)->tv_usec - (&start)->tv_usec;
-    if ((&used)->tv_usec < 0){
+    if ((&used)->tv_usec < 0)
+    {
         (&used)->tv_sec --;
         (&used)->tv_usec += 1000000;
     }
@@ -633,6 +635,61 @@ test_msleep(void)
 
     CU_ASSERT(coroutine_env.info.cid == 11);
     CU_ASSERT(coroutine_env.info.ran == 11);
+}
+
+int
+fetch_bg_thread_id(void *arg, void *result)
+{
+    (void)arg;
+    pthread_t *ptr = result;
+
+    *ptr = pthread_self();
+
+    return 0;
+}
+
+void *
+bg_run_main_func(void *arg)
+{
+    int write_fd = *(int*)arg;
+    pthread_t tid;
+    pthread_t self_tid = pthread_self();
+
+    crt_bg_run(fetch_bg_thread_id, NULL, &tid);
+
+    CU_ASSERT(memcmp(&tid, &self_tid, sizeof tid) != 0);
+
+    char buf[16] = {0};
+    memcpy(&buf[0], &tid, 8);
+    memcpy(&buf[8], &self_tid, 8);
+
+    crt_disk_write(write_fd, buf, sizeof buf);
+    crt_exit(NULL);
+}
+
+void
+test_bg_run(void)
+{
+    int pipe_fd[2];
+    char buf[16];
+
+    pthread_t *t1_ptr, *t2_ptr, t3;
+
+    pipe(pipe_fd);
+    crt_create(NULL, NULL, bg_run_main_func, (void*)&pipe_fd[1]);
+    read(pipe_fd[0], &buf[0], sizeof 16);
+
+    t1_ptr = (pthread_t *)&buf[0];
+    t2_ptr = (pthread_t *)&buf[8];
+    t3 = pthread_self();
+    CU_ASSERT(memcmp(t1_ptr, t2_ptr, 8)  != 0);
+    CU_ASSERT(memcmp(t1_ptr, &t3, 8) != 0);
+    CU_ASSERT(memcmp(t2_ptr, &t3, 8) != 0);
+
+    close(pipe_fd[0]);
+    close(pipe_fd[1]);
+    CU_ASSERT(coroutine_env.info.cid == 12);
+    CU_ASSERT(coroutine_env.info.ran == 12);
 }
 
 int
@@ -734,6 +791,13 @@ check_coroutine(void)
     /* }}} */
     /* {{{ CU_add_test: test_msleep */
     if (CU_add_test(pSuite, "test_msleep", test_msleep) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_bg_run */
+    if (CU_add_test(pSuite, "test_bg_run", test_bg_run) == NULL)
     {
         CU_cleanup_registry();
         return CU_get_error();

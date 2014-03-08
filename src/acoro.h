@@ -23,7 +23,8 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
-typedef void *(*begin_routine_t)(void*);
+typedef void *(*launch_routine_t)(void *);
+typedef int (*bg_routine_t)(void *, void *);
 typedef uint64_t coroutine_t;
 typedef struct coroutine_attr_s
 {
@@ -44,7 +45,7 @@ int  coroutine_get_retval();
 
 int init_coroutine_env();
 int destroy_coroutine_env();
-int crt_create(coroutine_t *cid, const void * restrict attr, begin_routine_t br, void * restrict arg);
+int crt_create(coroutine_t *cid, const void * restrict attr, launch_routine_t br, void * restrict arg);
 int crt_attr_setstacksize(coroutine_attr_t *attr, size_t stacksize);
 
 #define crt_errno (crt_get_err_code())
@@ -52,6 +53,7 @@ int crt_set_nonblock(int fd);
 int crt_set_block(int fd);
 int crt_get_err_code();
 int crt_msleep(uint64_t msec);
+int crt_bg_run(bg_routine_t bg_routine, void *arg, void *result);
 
 /* {{{ void     crt_exit(void *) */
 
