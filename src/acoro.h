@@ -54,6 +54,7 @@ int crt_set_block(int fd);
 int crt_get_err_code();
 int crt_msleep(uint64_t msec);
 int crt_bg_run(bg_routine_t bg_routine, void *arg, void *result);
+int crt_bg_order_run(bg_routine_t bg_routine, void *arg, void *result);
 
 /* {{{ void     crt_exit(void *) */
 

@@ -22,6 +22,9 @@
  * 1. Add logger thread
  * 2. Add feature: switch current context to background in user's coroutine
  * 3. join method
+ *
+ * 2014-03-09
+ * 1. Improve communication performance: better pipe
  */
 
 /* {{{ include header files */
@@ -363,7 +366,7 @@ do_disk_open(list_item_ptr(task_queue) task_ptr)
     struct open_arg_s *arg;
 
     arg = &task_ptr->args.open_arg;
-    if (arg->flags | O_CREAT)
+    if (arg->flags & O_CREAT) // may refer to coroutine_set_disk_open()
         task_ptr->ret.val = open(arg->pathname, arg->flags, arg->mode);
     else
         task_ptr->ret.val = open(arg->pathname, arg->flags);
@@ -983,7 +986,13 @@ coroutine_set_disk_open(const char *pathname, int flags, ...)
     task_ptr->action = act_disk_open;
     task_ptr->args.open_arg.pathname = pathname;
     task_ptr->args.open_arg.flags = flags;
-    if (flags | O_CREAT) // XXX: should it be `&' instead of `|' ?
+    /*
+     * An interesting bug here, either you use `flags & O_CREAT' or
+     * `flags | O_CREAT' will cause same result: the correct result,
+     * even that `flags | O_CREAT' is apparently wrong here.
+     * This is the same for the judgement statement in do_disk_open().
+     */
+    if (flags & O_CREAT)
     {
         va_start(ap, flags);
         task_ptr->args.open_arg.mode = va_arg(ap, mode_t);

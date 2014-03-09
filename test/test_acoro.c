@@ -719,6 +719,8 @@ test_bg_run(void)
     CU_ASSERT(memcmp(t1_ptr, &t3, 8) != 0);
     CU_ASSERT(memcmp(t2_ptr, &t3, 8) != 0);
 
+    usleep(1000 * 10);
+
     close(pipe_fd[0]);
     close(pipe_fd[1]);
     CU_ASSERT(coroutine_env.info.cid == 12);
@@ -840,6 +842,22 @@ check_coroutine(void)
     return 0;
 }
 
+int
+check_bugs(void)
+{
+    /* {{{ init CU suite check_bugs */
+    CU_pSuite pSuite = NULL;
+    pSuite = CU_add_suite("check_bugs", NULL, NULL);
+    if (pSuite == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+
+    return 0;
+}
+
 void
 test_destroy_coroutine_env(void)
 {
@@ -885,6 +903,8 @@ main(void)
     check_init();
 
     check_coroutine();
+
+    check_bugs();
 
     check_destroy_coroutine_env();
 
