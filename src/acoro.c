@@ -434,7 +434,10 @@ ev_sock_timeout(struct ev_loop *loop, ev_timer *timer_w, int event)
 
     assert(event == EV_TIMEOUT);
     task_ptr = TIMER_WATCHER_REF_TASKPTR(timer_w);
-    ev_sock_stop(task_ptr, -1, EWOULDBLOCK);
+    if (task_ptr->ec.have_io == 0)
+        ev_sock_stop(task_ptr, -1, EWOULDBLOCK);
+    else
+        ev_sock_stop(task_ptr, task_ptr->ec.have_io, 0);
     coroutine_notify_manager(task_ptr);
 }
 

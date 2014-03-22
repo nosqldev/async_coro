@@ -143,7 +143,7 @@ test_null_coroutine(void)
 
     CU_ASSERT(ret == 0);
 
-    usleep(1000*10);
+    usleep(1000*20);
     CU_ASSERT(coroutine_env.info.ran == 1);
 }
 
@@ -283,7 +283,7 @@ test_utils(void)
 }
 
 void *
-dummy_slow_server(void *arg)
+dummy_none_op_server(void *arg)
 {
     int listenfd;
     struct sockaddr_in server_addr;
@@ -304,6 +304,37 @@ dummy_slow_server(void *arg)
     assert(sockfd > 0);
 
     usleep(1000 * 10);
+
+    close(sockfd);
+    close(listenfd);
+
+    return NULL;
+}
+
+void *
+dummy_slow_server(void *arg)
+{
+    int listenfd;
+    struct sockaddr_in server_addr;
+    int flag = 1;
+    (void)arg;
+
+    listenfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(listenfd > 0);
+    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof flag);
+    bzero(&server_addr, sizeof server_addr);
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(2000);
+    assert(bind(listenfd, (struct sockaddr *) &server_addr, sizeof server_addr) == 0);
+    assert(listen(listenfd, 5) == 0);
+
+    int sockfd = accept(listenfd, NULL, NULL);
+    assert(sockfd > 0);
+
+    ssize_t nwrite = write(sockfd, "abc", 4);
+    assert(nwrite == 4);
+    usleep(1000 * 100);
 
     close(sockfd);
     close(listenfd);
@@ -389,6 +420,7 @@ test_sock_read(void)
 void *
 sock_timeout(void *arg)
 {
+    /* read nothing in this test case */
     (void)arg;
     struct sockaddr_in server_addr;
     char buf[32];
@@ -403,8 +435,67 @@ sock_timeout(void *arg)
     crt_set_nonblock(sockfd);
 
     gettimeofday(&start, NULL);
-    CU_ASSERT(crt_tcp_read_to(sockfd, buf, sizeof buf, 1) == -1);
+    CU_ASSERT(crt_tcp_read_to(sockfd, buf, sizeof buf, 10) == -1);
     CU_ASSERT(crt_get_err_code() == EWOULDBLOCK);
+    gettimeofday(&end, NULL);
+    (&used)->tv_sec = (&end)->tv_sec - (&start)->tv_sec;
+    (&used)->tv_usec = (&end)->tv_usec - (&start)->tv_usec;
+    if ((&used)->tv_usec < 0){
+        (&used)->tv_sec --;
+        (&used)->tv_usec += 1000000;
+    }
+    CU_ASSERT(used.tv_sec == 0);
+    CU_ASSERT(used.tv_usec <= 1000 * 20); /* more time to make sure: 20 ms */
+
+    close(sockfd);
+
+    crt_exit(NULL);
+}
+
+void *
+sock_timeout2(void *arg)
+{
+    /*
+     * read a bit of data in this test case
+     *
+     * the original intention is to test the following scenario:
+     * 1. crt_tcp_read_to() read a few data from connection
+     * 2. but it's timeout relative to it's argument
+     *
+     * if data was read, the standard activity should be:
+     * 1. crt_tcp_read_to() return how many bytes have been read
+     * 2. errno == 0
+     *
+     * if nothing was read, then:
+     * 1. crt_tcp_read_to() return -1
+     * 2. errno == EAGAIN or EWOULDBLOCK
+     *
+     * however, it's difficult to test the expected scenario due to it's hard
+     * to control:
+     * 1. crt_tcp_read_to() MUST be timeout
+     * 2. data MUST be read
+     *
+     * it seems that if we send data as much as we can, it will be timeout
+     */
+    (void)arg;
+
+    struct sockaddr_in server_addr;
+    char buf[32];
+    struct timeval start, end, used;
+
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(2000);
+    int sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    assert(sockfd > 0);
+    CU_ASSERT(connect(sockfd, (struct sockaddr *)&server_addr, sizeof server_addr) == 0);
+    crt_set_nonblock(sockfd);
+
+    gettimeofday(&start, NULL);
+    /* set the timeout duration to the least length: 1ms */
+    CU_ASSERT(crt_tcp_read_to(sockfd, buf, sizeof buf, 1) == 4);
+    CU_ASSERT(crt_get_err_code() == 0);
+    CU_ASSERT(strcmp(buf, "abc") == 0);
     gettimeofday(&end, NULL);
     (&used)->tv_sec = (&end)->tv_sec - (&start)->tv_sec;
     (&used)->tv_usec = (&end)->tv_usec - (&start)->tv_usec;
@@ -424,13 +515,26 @@ void
 test_sock_timeout(void)
 {
     pthread_t tid;
-    pthread_create(&tid, NULL, dummy_slow_server, NULL);
+
+    /* test crt_tcp_read_to on a server which will do nothing except accept */
+    pthread_create(&tid, NULL, dummy_none_op_server, NULL);
     sched_yield();
     usleep(1000);
 
     crt_create(NULL, NULL, sock_timeout, NULL);
     usleep(20 * 1000);
     CU_ASSERT(coroutine_env.info.ran == 7);
+
+    pthread_join(tid, NULL);
+
+    /* test crt_tcp_read_to on a server which will response a bit of data */
+    pthread_create(&tid, NULL, dummy_slow_server, NULL);
+    sched_yield();
+    usleep(1000);
+
+    crt_create(NULL, NULL, sock_timeout2, NULL);
+    usleep(20 * 1000);
+    CU_ASSERT(coroutine_env.info.ran == 8);
 
     pthread_join(tid, NULL);
 }
@@ -505,8 +609,8 @@ test_sock_write(void)
 
     crt_create(NULL, NULL, sock_write, NULL);
     usleep(10000);
-    CU_ASSERT(coroutine_env.info.ran == 8);
-    if (coroutine_env.info.ran != 8)
+    CU_ASSERT(coroutine_env.info.ran == 9);
+    if (coroutine_env.info.ran != 9)
     {
         printf("\n[coroutine_env.info.ran] = %" PRIu64 "\n", coroutine_env.info.ran);
     }
@@ -531,14 +635,14 @@ void
 test_tcp_blocked_connect(void)
 {
     pthread_t tid;
-    pthread_create(&tid, NULL, dummy_slow_server, NULL);
+    pthread_create(&tid, NULL, dummy_none_op_server, NULL);
     sched_yield();
     usleep(1000);
 
     crt_create(NULL, NULL, tcp_blocked_connect, NULL);
 
     usleep(20 * 1000);
-    CU_ASSERT(coroutine_env.info.ran == 9);
+    CU_ASSERT(coroutine_env.info.ran == 10);
 
     pthread_join(tid, NULL);
 }
@@ -572,7 +676,7 @@ test_tcp_timeout_connect(void)
     crt_create(NULL, NULL, tcp_timeout_connect, NULL);
 
     usleep(20 * 1000);
-    CU_ASSERT(coroutine_env.info.ran == 10);
+    CU_ASSERT(coroutine_env.info.ran == 11);
     pthread_join(tid, NULL);
 }
 
@@ -633,8 +737,8 @@ test_msleep(void)
     crt_create(NULL, NULL, msleep_func, NULL);
     usleep(200 * 1000); /* 200 ms */
 
-    CU_ASSERT(coroutine_env.info.cid == 11);
-    CU_ASSERT(coroutine_env.info.ran == 11);
+    CU_ASSERT(coroutine_env.info.cid == 12);
+    CU_ASSERT(coroutine_env.info.ran == 12);
 }
 
 int
@@ -723,8 +827,8 @@ test_bg_run(void)
 
     close(pipe_fd[0]);
     close(pipe_fd[1]);
-    CU_ASSERT(coroutine_env.info.cid == 12);
-    CU_ASSERT(coroutine_env.info.ran == 12);
+    CU_ASSERT(coroutine_env.info.cid == 13);
+    CU_ASSERT(coroutine_env.info.ran == 13);
 }
 
 int
