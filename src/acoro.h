@@ -31,6 +31,11 @@ typedef struct coroutine_attr_s
     size_t stacksize;
 } coroutine_attr_t;
 
+#define CORO_ERR_SOCKET (-1)
+#define CORO_ERR_BIND (-2)
+#define CORO_ERR_LISTEN (-3)
+#define CORO_ERR_SET_NONBLOCK (-4)
+
 void coroutine_notify_background_worker(void);
 void coroutine_get_context(ucontext_t **manager_context, ucontext_t **task_context);
 
@@ -55,6 +60,8 @@ int crt_get_err_code();
 int crt_msleep(uint64_t msec);
 int crt_bg_run(bg_routine_t bg_routine, void *arg, void *result);
 int crt_bg_order_run(bg_routine_t bg_routine, void *arg, void *result);
+int crt_tcp_prepare_sock(in_addr_t addr, uint16_t port);
+int crt_tcp_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 
 /* {{{ void     crt_exit(void *) */
 

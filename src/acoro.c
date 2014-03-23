@@ -21,7 +21,7 @@
  * 2014-03-01
  * 1. Add logger thread
  * 2. Add feature: switch current context to background in user's coroutine
- * 3. join method
+ * 3. join method: add arg for join method in crt_attr_setXXX() is a good choice
  *
  * 2014-03-09
  * 1. Improve communication performance: better pipe
@@ -111,6 +111,9 @@ enum action_t
 
     act_bg_run,
     act_bg_run_done,
+
+    act_tcp_accept,
+    act_tcp_accept_done,
 };
 
 struct init_arg_s
@@ -164,6 +167,13 @@ struct routine_arg_s
     void *result;
 };
 
+struct tcp_accept_arg_s
+{
+    int sockfd;
+    struct sockaddr *addr;
+    socklen_t *addrlen;
+};
+
 union args_u
 {
     struct init_arg_s init_arg;
@@ -172,6 +182,7 @@ union args_u
     struct connect_arg_s connect_arg;
     struct general_arg_s general_arg;
     struct routine_arg_s routine_arg;
+    struct tcp_accept_arg_s tcp_accept_arg;
 };
 
 struct ev_controller_s
@@ -839,7 +850,47 @@ do_bg_run(list_item_ptr(task_queue) task_ptr)
     task_ptr->ret.err_code = 0;
     task_ptr->action = act_bg_run_done;
 
+    return 0;
+}
+
+static void
+ev_tcp_accept(struct ev_loop *loop, ev_io *io_w, int event)
+{
+    list_item_ptr(task_queue) task_ptr;
+    struct tcp_accept_arg_s *arg;
+    int accept_fd;
+
+    (void)loop;
+
+    assert(event == EV_READ);
+    task_ptr = IO_WATCHER_REF_TASKPTR(io_w);
+    arg = &task_ptr->args.tcp_accept_arg;
+    assert(task_ptr->action == act_tcp_accept);
+    accept_fd = accept(arg->sockfd, arg->addr, arg->addrlen);
+
+    task_ptr->ret.val = accept_fd; /* should be -1 */
+    task_ptr->action = act_tcp_accept_done;
+    if (accept_fd < 0)
+    {
+        assert(accept_fd == -1);
+        task_ptr->ret.err_code = errno;
+    }
+    else
+    {
+        task_ptr->ret.err_code = 0;
+    }
+
     coroutine_notify_manager(task_ptr);
+}
+
+static int
+do_tcp_accept(list_item_ptr(task_queue) task_ptr)
+{
+    struct tcp_accept_arg_s *arg;
+
+    arg = &task_ptr->args.tcp_accept_arg;
+    ev_io_init(&task_ptr->ec.sock_watcher, ev_tcp_accept, arg->sockfd, EV_READ);
+    ev_io_start(CurrLoop, &task_ptr->ec.sock_watcher);
 
     return 0;
 }
@@ -902,6 +953,11 @@ do_task(list_item_ptr(task_queue) task_ptr)
 
     case act_bg_run:
         do_bg_run(task_ptr);
+        retval = 0;
+        break;
+
+    case act_tcp_accept:
+        do_tcp_accept(task_ptr);
         retval = 1;
         break;
 
@@ -1291,6 +1347,75 @@ crt_bg_run(bg_routine_t bg_routine, void *arg, void *result)
 
     ret = coroutine_get_retval();
 
+    return ret;
+}
+
+int
+crt_tcp_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
+{
+    int accept_fd;
+    list_item_ptr(task_queue) task_ptr;
+    ucontext_t *manager_context, *task_context;
+
+    task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
+    task_ptr->action = act_tcp_accept;
+    task_ptr->args.tcp_accept_arg.sockfd = sockfd;
+    task_ptr->args.tcp_accept_arg.addr = addr;
+    task_ptr->args.tcp_accept_arg.addrlen = addrlen;
+    coroutine_notify_background_worker();
+    coroutine_get_context(&manager_context, &task_context);
+    swapcontext(task_context, manager_context); // goto manager contenxt in manager thread
+
+    accept_fd = coroutine_get_retval();
+
+    return accept_fd;
+}
+
+int
+crt_tcp_prepare_sock(in_addr_t addr, uint16_t port)
+{
+    int sockfd;
+    int flag;
+    struct sockaddr_in server_addr;
+    int ret;
+
+    sockfd = -1;
+    ret = 0;
+    flag = 1;
+    sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sockfd < 0)
+    {
+        ret = CORO_ERR_SOCKET;
+        goto exception;
+    }
+    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof flag);
+    bzero(&server_addr, sizeof server_addr);
+    server_addr.sin_addr.s_addr = htonl(addr);
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port);
+    if (bind(sockfd, (struct sockaddr *)&server_addr, sizeof server_addr) < 0)
+    {
+        ret = CORO_ERR_BIND;
+        goto exception;
+    }
+    if (listen(sockfd, 128) < 0)
+    {
+        ret = CORO_ERR_LISTEN;
+        goto exception;
+    }
+    if (crt_set_nonblock(sockfd) != 0)
+    {
+        ret = CORO_ERR_SET_NONBLOCK;
+        goto exception;
+    }
+
+    goto leave;
+
+exception:
+    if (sockfd >= 0)
+        close(sockfd);
+
+leave:
     return ret;
 }
 
