@@ -35,6 +35,7 @@ typedef struct coroutine_attr_s
 #define CORO_ERR_BIND (-2)
 #define CORO_ERR_LISTEN (-3)
 #define CORO_ERR_SET_NONBLOCK (-4)
+#define CORO_ERR_SETSOCKOPT (-5)
 
 void coroutine_notify_background_worker(void);
 void coroutine_get_context(ucontext_t **manager_context, ucontext_t **task_context);
@@ -202,6 +203,7 @@ int crt_tcp_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 
 /* }}} */
 /* {{{ int      crt_sock_close(int fd) */
+// TODO rename to crt_tcp_close()
 
 /* This is not a slow call, so we can call close(2) directly */
 #define crt_sock_close(fd) ({                                   \

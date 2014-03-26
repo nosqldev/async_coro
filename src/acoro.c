@@ -25,6 +25,9 @@
  *
  * 2014-03-09
  * 1. Improve communication performance: better pipe
+ *
+ * 2014-03-26
+ * 2. yield interface
  */
 
 /* {{{ include header files */
@@ -332,6 +335,13 @@ loop:
             break;
 
         case act_bg_run_done:
+            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
+            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
+            if (task_ptr->action == act_finished_coroutine)
+                goto loop;
+            break;
+
+        case act_tcp_accept_done:
             coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
             swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
             if (task_ptr->action == act_finished_coroutine)
@@ -654,6 +664,9 @@ do_tcp_blocked_connect(list_item_ptr(task_queue) task_ptr)
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = arg->port;
 
+    /* TODO
+     * ret might be EINPROGRESS, try few times here
+     */
     ret = connect(sockfd, (struct sockaddr*)&server_addr, sizeof server_addr);
     if (ret == 0)
     {
@@ -709,7 +722,7 @@ ev_sock_connect(struct ev_loop *loop, ev_io *io_w, int event)
 
     ret = 0;
     len = sizeof ret;
-    assert((event == EV_READ) || (event == EV_WRITE));
+    assert((event & EV_READ) || (event & EV_WRITE));
     task_ptr = IO_WATCHER_REF_TASKPTR(io_w);
     arg = &task_ptr->args.connect_arg;
     assert(task_ptr->action = act_tcp_timeout_connect);
@@ -863,13 +876,26 @@ ev_tcp_accept(struct ev_loop *loop, ev_io *io_w, int event)
     (void)loop;
 
     assert(event == EV_READ);
-    task_ptr = IO_WATCHER_REF_TASKPTR(io_w);
-    arg = &task_ptr->args.tcp_accept_arg;
-    assert(task_ptr->action == act_tcp_accept);
-    accept_fd = accept(arg->sockfd, arg->addr, arg->addrlen);
+    if (event & EV_ERROR)
+    {
+        accept_fd = -1;
+        /* XXX
+         * need to free task_ptr? so, can we fetch the correct task_ptr through
+         * IO_WATCHER_REF_TASKPTR()?
+         */
+    }
+    else
+    {
+        task_ptr = IO_WATCHER_REF_TASKPTR(io_w);
+        arg = &task_ptr->args.tcp_accept_arg;
+        assert(task_ptr->action == act_tcp_accept);
+        accept_fd = accept(arg->sockfd, arg->addr, arg->addrlen);
+        ev_io_stop(CurrLoop, &task_ptr->ec.sock_watcher);
+    }
 
-    task_ptr->ret.val = accept_fd; /* should be -1 */
     task_ptr->action = act_tcp_accept_done;
+    task_ptr->ret.val = accept_fd;  /* might be -1 */
+
     if (accept_fd < 0)
     {
         assert(accept_fd == -1);
@@ -877,6 +903,7 @@ ev_tcp_accept(struct ev_loop *loop, ev_io *io_w, int event)
     }
     else
     {
+        crt_set_nonblock(accept_fd /* equal to task_ptr->ret.val */);
         task_ptr->ret.err_code = 0;
     }
 
@@ -887,6 +914,8 @@ static int
 do_tcp_accept(list_item_ptr(task_queue) task_ptr)
 {
     struct tcp_accept_arg_s *arg;
+
+    assert(task_ptr->action == act_tcp_accept);
 
     arg = &task_ptr->args.tcp_accept_arg;
     ev_io_init(&task_ptr->ec.sock_watcher, ev_tcp_accept, arg->sockfd, EV_READ);
@@ -1350,6 +1379,13 @@ crt_bg_run(bg_routine_t bg_routine, void *arg, void *result)
     return ret;
 }
 
+/**
+ * @brief A function corresponding to crt_tcp_accept() (release function:
+ * close_accept_fd()) doesn't exists since we don't need that requirement
+ * currently.
+ *
+ * @return
+ */
 int
 crt_tcp_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
 {
@@ -1380,19 +1416,24 @@ crt_tcp_prepare_sock(in_addr_t addr, uint16_t port)
     int ret;
 
     sockfd = -1;
-    ret = 0;
     flag = 1;
     sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    ret = sockfd;
+
     if (sockfd < 0)
     {
         ret = CORO_ERR_SOCKET;
         goto exception;
     }
-    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof flag);
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof flag) != 0)
+    {
+        ret = CORO_ERR_SETSOCKOPT;
+        goto exception;
+    }
     bzero(&server_addr, sizeof server_addr);
-    server_addr.sin_addr.s_addr = htonl(addr);
+    server_addr.sin_addr.s_addr = addr;
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
+    server_addr.sin_port = port;
     if (bind(sockfd, (struct sockaddr *)&server_addr, sizeof server_addr) < 0)
     {
         ret = CORO_ERR_BIND;
@@ -1412,6 +1453,7 @@ crt_tcp_prepare_sock(in_addr_t addr, uint16_t port)
     goto leave;
 
 exception:
+    coroutine_env.curr_task_ptr[ g_thread_id ]->ret.err_code = errno;
     if (sockfd >= 0)
         close(sockfd);
 

@@ -397,7 +397,7 @@ sock_read(void *arg)
     CU_ASSERT(ret == 0);
     CU_ASSERT(crt_get_err_code() == 0);
 
-    close(sockfd);
+    crt_sock_close(sockfd);
 
     crt_exit(NULL);
 }
@@ -411,7 +411,7 @@ test_sock_read(void)
     usleep(1000);
 
     crt_create(NULL, NULL, sock_read, NULL);
-    usleep(1000);
+    usleep(10000);
     CU_ASSERT(coroutine_env.info.ran == 6);
 
     pthread_join(tid, NULL);
@@ -447,7 +447,7 @@ sock_timeout(void *arg)
     CU_ASSERT(used.tv_sec == 0);
     CU_ASSERT(used.tv_usec <= 1000 * 20); /* more time to make sure: 20 ms */
 
-    close(sockfd);
+    crt_sock_close(sockfd);
 
     crt_exit(NULL);
 }
@@ -506,7 +506,7 @@ sock_timeout2(void *arg)
     CU_ASSERT(used.tv_sec == 0);
     CU_ASSERT(used.tv_usec <= 1000 * 20); /* more time to make sure: 20 ms */
 
-    close(sockfd);
+    crt_sock_close(sockfd);
 
     crt_exit(NULL);
 }
@@ -594,7 +594,7 @@ sock_write(void *arg)
     CU_ASSERT(ret == 3);
     CU_ASSERT(crt_get_err_code() == 0);
 
-    close(sockfd);
+    crt_sock_close(sockfd);
 
     crt_exit(NULL);
 }
@@ -808,13 +808,13 @@ void
 test_bg_run(void)
 {
     int pipe_fd[2];
-    char buf[16];
+    char buf[16] = {0};
 
     pthread_t *t1_ptr, *t2_ptr, t3;
 
     pipe(pipe_fd);
     crt_create(NULL, NULL, bg_run_main_func, (void*)&pipe_fd[1]);
-    read(pipe_fd[0], &buf[0], sizeof 16);
+    read(pipe_fd[0], &buf[0], 16);
 
     t1_ptr = (pthread_t *)&buf[0];
     t2_ptr = (pthread_t *)&buf[8];
@@ -829,6 +829,89 @@ test_bg_run(void)
     close(pipe_fd[1]);
     CU_ASSERT(coroutine_env.info.cid == 13);
     CU_ASSERT(coroutine_env.info.ran == 13);
+}
+
+#define LOOP_CNT (5)
+
+void *
+accept_client(void *arg)
+{
+    (void)arg;
+
+    for (int i=0; i<LOOP_CNT; i++)
+    {
+        int fd = crt_tcp_timeout_connect(inet_addr("127.0.0.1"), htons(2000), 10000);
+        if (fd < 0)
+            printf("connect failed: %d, %s\n", crt_get_err_code(), strerror(crt_get_err_code()));
+        CU_ASSERT(fd > 0);
+
+        /*
+         *char buf[128] = {0};
+         *ssize_t nread = read(fd, &buf[0], sizeof buf);
+         *CU_ASSERT(nread == 7);
+         *if (nread != 7)
+         *{
+         *    printf("\nnread = %zd, errcode = %d, err = %s\n", nread, errno, strerror(errno));
+         *}
+         *CU_ASSERT(strcmp(buf, "world!") == 0);
+         */
+
+        CU_ASSERT(crt_tcp_write(fd, "hello", 6) == 6);
+
+        crt_sock_close(fd);
+    }
+
+    crt_exit(NULL);
+}
+
+void *
+accept_server(void *arg)
+{
+    int sockfd = crt_tcp_prepare_sock(inet_addr("127.0.0.1"), htons(2000));
+    CU_ASSERT(sockfd > 0);
+
+    for (int i=0; i<LOOP_CNT; i++)
+    {
+        /* TODO
+         * fill the 2nd & 3rd args in crt_tcp_accept() and test
+         */
+        int tcpfd  = crt_tcp_accept(sockfd, NULL, NULL);
+        CU_ASSERT(tcpfd > 0);
+
+        /*
+         *ssize_t nwrite = write(tcpfd, "world!", 7);
+         *CU_ASSERT(nwrite == 7);
+         */
+
+        char buf[128] = {0};
+        ssize_t nread = crt_tcp_read(tcpfd, &buf[0], sizeof buf);
+        CU_ASSERT(nread == 6);
+        CU_ASSERT(strcmp(buf, "hello") == 0);
+
+        crt_sock_close(tcpfd);
+    }
+
+    crt_sock_close(sockfd);
+
+    int pipefd = *(int *)arg;
+    write(pipefd, "c", 1);
+
+    crt_exit(NULL);
+}
+
+void
+test_tcp_accept(void)
+{
+    int pipe_fd[2];
+    char buf[16];
+
+    pipe(pipe_fd);
+    crt_create(NULL, NULL, accept_client, NULL);
+    crt_create(NULL, NULL, accept_server, (void*)&pipe_fd[1]);
+    read(pipe_fd[0], &buf[0], 1);
+
+    close(pipe_fd[0]);
+    close(pipe_fd[1]);
 }
 
 int
@@ -937,6 +1020,13 @@ check_coroutine(void)
     /* }}} */
     /* {{{ CU_add_test: test_bg_run */
     if (CU_add_test(pSuite, "test_bg_run", test_bg_run) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_tcp_accept */
+    if (CU_add_test(pSuite, "test_tcp_accept", test_tcp_accept) == NULL)
     {
         CU_cleanup_registry();
         return CU_get_error();
