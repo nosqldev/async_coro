@@ -708,7 +708,7 @@ msleep_func(void *arg)
     }
     CU_ASSERT(msleep_retval == 0);
     CU_ASSERT(used.tv_sec == 0);
-    CU_ASSERT(used.tv_usec <= 1000 * 12);
+    CU_ASSERT(used.tv_usec <= 1000 * 13);
     CU_ASSERT(used.tv_usec >= 1000 * 9);
 
     gettimeofday(&start, NULL);
@@ -845,16 +845,11 @@ accept_client(void *arg)
             printf("connect failed: %d, %s\n", crt_get_err_code(), strerror(crt_get_err_code()));
         CU_ASSERT(fd > 0);
 
-        /*
-         *char buf[128] = {0};
-         *ssize_t nread = read(fd, &buf[0], sizeof buf);
-         *CU_ASSERT(nread == 7);
-         *if (nread != 7)
-         *{
-         *    printf("\nnread = %zd, errcode = %d, err = %s\n", nread, errno, strerror(errno));
-         *}
-         *CU_ASSERT(strcmp(buf, "world!") == 0);
-         */
+        char buf[128] = {0};
+        ssize_t nread = crt_tcp_read_to(fd, &buf[0], sizeof buf, 10); /* test timeout related IO function here */
+        CU_ASSERT(nread == 7);
+        if (nread != 7) { printf("\nnread = %zd, errcode = %d, err = %s\n", nread, errno, strerror(errno)); }
+        CU_ASSERT(strcmp(buf, "world!") == 0);
 
         CU_ASSERT(crt_tcp_write(fd, "hello", 6) == 6);
 
@@ -878,14 +873,13 @@ accept_server(void *arg)
         int tcpfd  = crt_tcp_accept(sockfd, NULL, NULL);
         CU_ASSERT(tcpfd > 0);
 
-        /*
-         *ssize_t nwrite = write(tcpfd, "world!", 7);
-         *CU_ASSERT(nwrite == 7);
-         */
+        ssize_t nwrite = crt_tcp_write(tcpfd, "world!", 7);
+        CU_ASSERT(nwrite == 7);
 
         char buf[128] = {0};
-        ssize_t nread = crt_tcp_read(tcpfd, &buf[0], sizeof buf);
+        ssize_t nread = crt_tcp_read(tcpfd, &buf[0], 6);
         CU_ASSERT(nread == 6);
+        if (nread != 6) { printf("\nnread = %zd, errcode = %d, err = %s\n", nread, errno, strerror(errno)); }
         CU_ASSERT(strcmp(buf, "hello") == 0);
 
         crt_sock_close(tcpfd);
