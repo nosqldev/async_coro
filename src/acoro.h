@@ -23,6 +23,10 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
+#ifdef __cplusplus
+#define restrict
+extern "C" {                                                                                         
+#endif 
 typedef void *(*launch_routine_t)(void *);
 typedef int (*bg_routine_t)(void *, void *);
 typedef uint64_t coroutine_t;
@@ -226,6 +230,9 @@ int crt_tcp_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
     0;                                                          \
 })
 /* }}} */
+#ifdef __cplusplus
+}                                                                                        
+#endif 
 
 #endif /* ! _ACORO_H_ */
 /* vim: set expandtab tabstop=4 shiftwidth=4 ft=c foldmethod=marker: */
