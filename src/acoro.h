@@ -32,13 +32,13 @@
 extern "C" {
 #endif /* ! __cplusplus */
 
+struct coroutine_attr_s;
+struct crt_sem_s;
 typedef void *(*launch_routine_t)(void *);
 typedef int (*bg_routine_t)(void *, void *);
 typedef uint64_t coroutine_t;
-typedef struct coroutine_attr_s
-{
-    size_t stacksize;
-} coroutine_attr_t;
+typedef struct coroutine_attr_s coroutine_attr_t;
+typedef struct crt_sem_s crt_sem_t;
 
 #define CORO_ERR_SOCKET (-1)
 #define CORO_ERR_BIND (-2)
@@ -57,6 +57,12 @@ void coroutine_set_sock_read(int fd, void *buf, size_t count, int msec);
 void coroutine_set_sock_write(int fd, void *buf, size_t count, int msec);
 void coroutine_set_sock_connect(in_addr_t ip, in_port_t port, int msec);
 int  coroutine_get_retval();
+
+int crt_sem_init(crt_sem_t *sem, int pshared __attribute__((unused)), unsigned int value);
+int crt_sem_post(crt_sem_t *sem);
+int crt_sem_priority_post(crt_sem_t *sem);
+int crt_sem_wait(crt_sem_t *sem);
+int crt_sem_destroy(crt_sem_t *sem);
 
 int init_coroutine_env();
 int destroy_coroutine_env();

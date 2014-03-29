@@ -27,7 +27,12 @@
  * 1. Improve communication performance: better pipe
  *
  * 2014-03-26
- * 2. yield interface
+ * 1. yield interface
+ *
+ * 2014-03-29
+ * 1. priority sem_post
+ * 2. channel
+ * 3. reduce 'case procedure' in new_manager()
  */
 
 /* {{{ include header files */
@@ -117,6 +122,8 @@ enum action_t
 
     act_tcp_accept,
     act_tcp_accept_done,
+
+    act_sem_activation,
 };
 
 struct init_arg_s
@@ -186,6 +193,17 @@ union args_u
     struct general_arg_s general_arg;
     struct routine_arg_s routine_arg;
     struct tcp_accept_arg_s tcp_accept_arg;
+};
+
+struct coroutine_attr_s
+{
+    size_t stacksize;
+};
+
+struct crt_sem_s
+{
+    volatile int value;
+    list_item_ptr(task_queue) task_ptr;
 };
 
 struct ev_controller_s
@@ -342,6 +360,13 @@ loop:
             break;
 
         case act_tcp_accept_done:
+            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
+            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
+            if (task_ptr->action == act_finished_coroutine)
+                goto loop;
+            break;
+
+        case act_sem_activation:
             coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
             swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
             if (task_ptr->action == act_finished_coroutine)
@@ -1459,6 +1484,61 @@ exception:
 
 leave:
     return ret;
+}
+
+int
+crt_sem_init(crt_sem_t *sem, int pshared __attribute__((unused)), unsigned int value)
+{
+    sem->value = value;
+    sem->task_ptr = NULL;
+
+    return 0;
+}
+
+int
+crt_sem_post(crt_sem_t *sem)
+{
+    ++ sem->value;
+    sem->task_ptr->action = act_sem_activation;
+    coroutine_notify_manager(sem->task_ptr);
+
+    return 0;
+}
+
+/**
+ * @brief This function should be ran in manager context.
+ *        After calling this, the task_ptr is only stored in sem, both
+ *        doing_queue and todo_queue have no record
+ */
+int
+crt_sem_wait(crt_sem_t *sem)
+{
+    ucontext_t *manager_context, *task_context;
+
+    for (; ;)
+    {
+        if (sem->value > 0)
+        {
+            -- sem->value;
+            goto leave;
+        }
+
+        sem->task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
+        coroutine_get_context(&manager_context, &task_context);
+        assert(&(sem->task_ptr->task_context) == task_context);
+        swapcontext(task_context, manager_context); // goto manager contenxt in manager thread
+    }
+
+leave:
+    return 0;
+}
+
+int
+crt_sem_destroy(crt_sem_t *sem)
+{
+    sem->value = 0;
+    sem->task_ptr = NULL;
+    return 0;
 }
 
 /* }}} */

@@ -723,7 +723,7 @@ msleep_func(void *arg)
     }
     CU_ASSERT(msleep_retval == 0);
     CU_ASSERT(used.tv_sec == 0);
-    CU_ASSERT(used.tv_usec <= 1000 * 102);
+    CU_ASSERT(used.tv_usec <= 1000 * 105);
     CU_ASSERT(used.tv_usec >= 1000 * 99);
 
     CU_ASSERT(crt_msleep(0) == -1);
@@ -908,6 +908,65 @@ test_tcp_accept(void)
     close(pipe_fd[1]);
 }
 
+void *
+test_sem_worker2(void *arg)
+{
+    crt_sem_t *sem_ptr = arg;
+
+    crt_sem_post(&sem_ptr[0]);
+    CU_ASSERT(sem_ptr[0].value == 1);
+    CU_ASSERT(sem_ptr[1].value == 0);
+    crt_sem_wait(&sem_ptr[1]);
+    CU_ASSERT(sem_ptr[1].value == 0);
+    crt_sem_post(&sem_ptr[0]);
+
+    crt_exit(NULL);
+}
+
+void *
+test_sem_worker1(void *arg)
+{
+    crt_sem_t sem[2];
+    int pipefd = (int)(intptr_t)arg;
+
+    crt_sem_init(&sem[0], 0, 0);
+    crt_sem_init(&sem[1], 0, 0);
+    crt_create(NULL, NULL, test_sem_worker2, &sem[0]);
+
+    CU_ASSERT(sem[0].value == 0);
+    crt_sem_wait(&sem[0]);
+    CU_ASSERT(sem[0].value == 0);
+    crt_sem_post(&sem[1]);
+    CU_ASSERT(sem[1].value == 1);
+    crt_sem_wait(&sem[0]);
+
+    CU_ASSERT(sem[0].value == 0);
+    CU_ASSERT(sem[1].value == 0);
+
+    crt_sem_destroy(&sem[0]);
+    crt_sem_destroy(&sem[1]);
+    CU_ASSERT(sem[0].value == 0);
+    CU_ASSERT(sem[0].task_ptr == NULL);
+
+    write(pipefd, "c", 1);
+
+    crt_exit(NULL);
+}
+
+void
+test_sem_series(void)
+{
+    int pipe_fd[2];
+    char buf[16];
+
+    pipe(pipe_fd);
+    crt_create(NULL, NULL, test_sem_worker1, (void*)(intptr_t)pipe_fd[1]);
+    read(pipe_fd[0], &buf[0], 1);
+
+    close(pipe_fd[0]);
+    close(pipe_fd[1]);
+}
+
 int
 check_coroutine(void)
 {
@@ -1021,6 +1080,13 @@ check_coroutine(void)
     /* }}} */
     /* {{{ CU_add_test: test_tcp_accept */
     if (CU_add_test(pSuite, "test_tcp_accept", test_tcp_accept) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_sem_series */
+    if (CU_add_test(pSuite, "test_sem_series", test_sem_series) == NULL)
     {
         CU_cleanup_registry();
         return CU_get_error();
