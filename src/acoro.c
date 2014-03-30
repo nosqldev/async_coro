@@ -34,7 +34,7 @@
  * 2. channel
  * 3. reduce 'case procedure' in new_manager()
  * 4. priority task queues
- * 5. rename CORO_* to CRT_*
+ * 5. rename CORO_* to CRT_* [done]
  *
  * 2014-03-30
  * 1. remove bsdqueue.h in header file
@@ -1467,12 +1467,12 @@ crt_tcp_prepare_sock(in_addr_t addr, uint16_t port)
 
     if (sockfd < 0)
     {
-        ret = CORO_ERR_SOCKET;
+        ret = CRT_ERR_SOCKET;
         goto exception;
     }
     if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof flag) != 0)
     {
-        ret = CORO_ERR_SETSOCKOPT;
+        ret = CRT_ERR_SETSOCKOPT;
         goto exception;
     }
     bzero(&server_addr, sizeof server_addr);
@@ -1481,17 +1481,17 @@ crt_tcp_prepare_sock(in_addr_t addr, uint16_t port)
     server_addr.sin_port = port;
     if (bind(sockfd, (struct sockaddr *)&server_addr, sizeof server_addr) < 0)
     {
-        ret = CORO_ERR_BIND;
+        ret = CRT_ERR_BIND;
         goto exception;
     }
     if (listen(sockfd, 128) < 0)
     {
-        ret = CORO_ERR_LISTEN;
+        ret = CRT_ERR_LISTEN;
         goto exception;
     }
     if (crt_set_nonblock(sockfd) != 0)
     {
-        ret = CORO_ERR_SET_NONBLOCK;
+        ret = CRT_ERR_SET_NONBLOCK;
         goto exception;
     }
 

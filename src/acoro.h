@@ -66,11 +66,11 @@ typedef struct crt_channel_s crt_sem_t;
 
 /* }}} */
 
-#define CORO_ERR_SOCKET (-1)
-#define CORO_ERR_BIND (-2)
-#define CORO_ERR_LISTEN (-3)
-#define CORO_ERR_SET_NONBLOCK (-4)
-#define CORO_ERR_SETSOCKOPT (-5)
+#define CRT_ERR_SOCKET (-1)
+#define CRT_ERR_BIND (-2)
+#define CRT_ERR_LISTEN (-3)
+#define CRT_ERR_SET_NONBLOCK (-4)
+#define CRT_ERR_SETSOCKOPT (-5)
 
 #define CRT_SEM_NORMAL_PRIORITY (0) /* the same as calling crt_sem_pos() */
 #define CRT_SEM_HIGH_PRIORITY (1) /* not implemented now, this will be effective after priority queue been implemented */
