@@ -23,6 +23,8 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
+#include "bsdqueue.h"
+
 #ifdef __cplusplus
 
 #ifndef restrict
@@ -32,19 +34,47 @@
 extern "C" {
 #endif /* ! __cplusplus */
 
-struct coroutine_attr_s;
-struct crt_sem_s;
+/* {{{ structures */
+
+struct coroutine_attr_s
+{
+    size_t stacksize;
+};
+
+/**
+ * @brief To implement crt_sem_t & crt_channel_t
+ */
+struct crt_channel_s
+{
+    volatile int value; /* `volatile' is not necessary actually */
+    list_item_ptr(task_queue) task_ptr;
+
+    /* the following fields are effective in crt_channel_t */
+    size_t buf_capacity;
+    size_t buf_offset;
+    void *buf;
+};
+
+/* }}} */
+/* {{{ typedef */
+
 typedef void *(*launch_routine_t)(void *);
 typedef int (*bg_routine_t)(void *, void *);
 typedef uint64_t coroutine_t;
 typedef struct coroutine_attr_s coroutine_attr_t;
-typedef struct crt_sem_s crt_sem_t;
+typedef struct crt_channel_s crt_sem_t;
+
+/* }}} */
 
 #define CORO_ERR_SOCKET (-1)
 #define CORO_ERR_BIND (-2)
 #define CORO_ERR_LISTEN (-3)
 #define CORO_ERR_SET_NONBLOCK (-4)
 #define CORO_ERR_SETSOCKOPT (-5)
+
+#define CRT_SEM_NORMAL_PRIORITY (0) /* the same as calling crt_sem_pos() */
+#define CRT_SEM_HIGH_PRIORITY (1) /* not implemented now, this will be effective after priority queue been implemented */
+#define CRT_SEM_CRITICAL_PRIORITY (2) /* the coroutine been posted will be ran immediately */
 
 void coroutine_notify_background_worker(void);
 void coroutine_get_context(ucontext_t **manager_context, ucontext_t **task_context);
@@ -60,7 +90,7 @@ int  coroutine_get_retval();
 
 int crt_sem_init(crt_sem_t *sem, int pshared __attribute__((unused)), unsigned int value);
 int crt_sem_post(crt_sem_t *sem);
-int crt_sem_priority_post(crt_sem_t *sem);
+int crt_sem_priority_post(crt_sem_t *sem, int flag);
 int crt_sem_wait(crt_sem_t *sem);
 int crt_sem_destroy(crt_sem_t *sem);
 
@@ -68,6 +98,7 @@ int init_coroutine_env();
 int destroy_coroutine_env();
 int crt_create(coroutine_t *cid, const void * restrict attr, launch_routine_t br, void * restrict arg);
 int crt_attr_setstacksize(coroutine_attr_t *attr, size_t stacksize);
+int crt_sched_yield(void);
 
 #define crt_errno (crt_get_err_code())
 int crt_set_nonblock(int fd);

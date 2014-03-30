@@ -27,6 +27,10 @@
 #include "acoro.c"
 
 int lowest_fd;
+int global_counter = 0;
+
+#define init_seq_checker() do { global_counter = 1; } while (0)
+#define check_seq_checker_in_step(n) do { CU_ASSERT(global_counter == n); global_counter ++; } while (0)
 
 void
 test_init_coroutine_env(void)
@@ -909,7 +913,7 @@ test_tcp_accept(void)
 }
 
 void *
-test_sem_worker2(void *arg)
+test_basic_sem_worker2(void *arg)
 {
     crt_sem_t *sem_ptr = arg;
 
@@ -924,14 +928,14 @@ test_sem_worker2(void *arg)
 }
 
 void *
-test_sem_worker1(void *arg)
+test_basic_sem_worker1(void *arg)
 {
     crt_sem_t sem[2];
     int pipefd = (int)(intptr_t)arg;
 
     crt_sem_init(&sem[0], 0, 0);
     crt_sem_init(&sem[1], 0, 0);
-    crt_create(NULL, NULL, test_sem_worker2, &sem[0]);
+    crt_create(NULL, NULL, test_basic_sem_worker2, &sem[0]);
 
     CU_ASSERT(sem[0].value == 0);
     crt_sem_wait(&sem[0]);
@@ -945,8 +949,8 @@ test_sem_worker1(void *arg)
 
     crt_sem_destroy(&sem[0]);
     crt_sem_destroy(&sem[1]);
-    CU_ASSERT(sem[0].value == 0);
-    CU_ASSERT(sem[0].task_ptr == NULL);
+    CU_ASSERT(sem[0].value == (int)0xCCCCCCCC);
+    CU_ASSERT(sem[0].task_ptr == (void*)0xCCCCCCCCCCCCCCCC);
 
     write(pipefd, "c", 1);
 
@@ -954,13 +958,140 @@ test_sem_worker1(void *arg)
 }
 
 void
-test_sem_series(void)
+test_basic_sem_series(void)
+{
+    /* test:
+     * 1. run crt_sem_wait() first
+     * 2. ping pong between two coroutines
+     */
+    int pipe_fd[2];
+    char buf[16];
+
+    pipe(pipe_fd);
+    crt_create(NULL, NULL, test_basic_sem_worker1, (void*)(intptr_t)pipe_fd[1]);
+    read(pipe_fd[0], &buf[0], 1);
+
+    close(pipe_fd[0]);
+    close(pipe_fd[1]);
+}
+
+void *
+test_simple_sem_worker2(void *arg)
+{
+    crt_sem_t *sem_ptr = arg;
+
+    CU_ASSERT(list_size(coroutine_env.todo_queue) == 1);
+    crt_sem_wait(sem_ptr);
+
+    crt_exit(NULL);
+}
+
+void *
+test_simple_sem_worker1(void *arg)
+{
+    crt_sem_t sem;
+    int pipefd = (int)(intptr_t)arg;
+
+    crt_sem_init(&sem, 0, 0);
+
+    CU_ASSERT(list_size(coroutine_env.todo_queue) == 0);
+    crt_create(NULL, NULL, test_simple_sem_worker2, &sem);
+    CU_ASSERT(list_size(coroutine_env.todo_queue) == 1);
+    crt_sem_post(&sem);
+    CU_ASSERT(list_size(coroutine_env.todo_queue) == 1);
+    crt_sched_yield();
+    CU_ASSERT(list_size(coroutine_env.todo_queue) == 0);
+
+    crt_sem_destroy(&sem);
+
+    write(pipefd, "c", 1);
+
+    crt_exit(NULL);
+}
+
+void
+test_simple_sem(void)
+{
+    /* test:
+     * 1. run crt_sem_post() first
+     * 2. also test crt_sched_yield()
+     */
+    int pipe_fd[2];
+    char buf[16];
+
+    pipe(pipe_fd);
+
+    CU_ASSERT(list_size(coroutine_env.doing_queue) == 0);
+    CU_ASSERT(list_size(coroutine_env.todo_queue) == 0);
+    crt_create(NULL, NULL, test_simple_sem_worker1, (void*)(intptr_t)pipe_fd[1]);
+    read(pipe_fd[0], &buf[0], 1);
+
+    close(pipe_fd[0]);
+    close(pipe_fd[1]);
+}
+
+void *
+test_prio_sem_worker3(void *arg)
+{
+    crt_sem_t *sem_ptr = arg;
+
+    check_seq_checker_in_step(5);
+    CU_ASSERT(list_size(coroutine_env.todo_queue) == 0);
+    crt_sem_post(sem_ptr);
+    check_seq_checker_in_step(6);
+    crt_exit(NULL);
+}
+
+void *
+test_prio_sem_worker2(void *arg)
+{
+    crt_sem_t *sem_ptr = arg;
+
+    CU_ASSERT(list_size(coroutine_env.todo_queue) == 1); /* only test_prio_sem_worker3 is in todo_queue */
+    check_seq_checker_in_step(2);
+    crt_sem_priority_post(sem_ptr, CRT_SEM_CRITICAL_PRIORITY);
+    check_seq_checker_in_step(3);
+
+    crt_exit(NULL);
+}
+
+void *
+test_prio_sem_worker1(void *arg)
+{
+    crt_sem_t sem;
+    int pipefd = (int)(intptr_t)arg;
+
+    init_seq_checker();
+
+    crt_sem_init(&sem, 0, 0);
+    crt_create(NULL, NULL, test_prio_sem_worker2, &sem);
+    crt_create(NULL, NULL, test_prio_sem_worker3, &sem);
+
+    CU_ASSERT(list_size(coroutine_env.todo_queue) == 2);
+
+    check_seq_checker_in_step(1);
+
+    crt_sem_wait(&sem);
+    CU_ASSERT(list_size(coroutine_env.todo_queue) == 1);
+    check_seq_checker_in_step(4);
+
+    crt_sem_wait(&sem);
+    check_seq_checker_in_step(7);
+
+    crt_sem_destroy(&sem);
+    write(pipefd, "c", 1);
+
+    crt_exit(NULL);
+}
+
+void
+test_prio_sem(void)
 {
     int pipe_fd[2];
     char buf[16];
 
     pipe(pipe_fd);
-    crt_create(NULL, NULL, test_sem_worker1, (void*)(intptr_t)pipe_fd[1]);
+    crt_create(NULL, NULL, test_prio_sem_worker1, (void*)(intptr_t)pipe_fd[1]);
     read(pipe_fd[0], &buf[0], 1);
 
     close(pipe_fd[0]);
@@ -1085,8 +1216,22 @@ check_coroutine(void)
         return CU_get_error();
     }
     /* }}} */
-    /* {{{ CU_add_test: test_sem_series */
-    if (CU_add_test(pSuite, "test_sem_series", test_sem_series) == NULL)
+    /* {{{ CU_add_test: test_basic_sem_series */
+    if (CU_add_test(pSuite, "test_basic_sem_series", test_basic_sem_series) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_simple_sem */
+    if (CU_add_test(pSuite, "test_simple_sem", test_simple_sem) == NULL)
+    {
+        CU_cleanup_registry();
+        return CU_get_error();
+    }
+    /* }}} */
+    /* {{{ CU_add_test: test_prio_sem */
+    if (CU_add_test(pSuite, "test_prio_sem", test_prio_sem) == NULL)
     {
         CU_cleanup_registry();
         return CU_get_error();

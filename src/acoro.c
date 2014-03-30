@@ -20,19 +20,25 @@
  *
  * 2014-03-01
  * 1. Add logger thread
- * 2. Add feature: switch current context to background in user's coroutine
+ * 2. Add feature: switch current context to background in user's coroutine [done]
  * 3. join method: add arg for join method in crt_attr_setXXX() is a good choice
  *
  * 2014-03-09
  * 1. Improve communication performance: better pipe
  *
  * 2014-03-26
- * 1. yield interface
+ * 1. yield interface [done]
  *
  * 2014-03-29
- * 1. priority sem_post
+ * 1. priority sem_post [done]
  * 2. channel
  * 3. reduce 'case procedure' in new_manager()
+ * 4. priority task queues
+ * 5. rename CORO_* to CRT_*
+ *
+ * 2014-03-30
+ * 1. remove bsdqueue.h in header file
+ * 2. crt_sem_timedwait()
  */
 
 /* {{{ include header files */
@@ -44,7 +50,6 @@
 #include <sched.h>
 
 #include "acoro.h"
-#include "bsdqueue.h"
 #include "ev.h"
 
 /* }}} */
@@ -63,6 +68,7 @@
 
 #define Shift(name, ptr) do { Lock(name); list_shift(coroutine_env.name, ptr); UnLock(name); } while (0)
 #define Push(name, ptr) do { Lock(name); list_push(coroutine_env.name, ptr); UnLock(name); } while (0)
+#define Unshift(name, ptr) do { Lock(name); list_unshift(coroutine_env.name, ptr); UnLock(name); } while (0)
 #define Remove(name, ptr) do { Lock(name); list_remove(coroutine_env.name, ptr); UnLock(name); } while (0)
 
 #define IO_WATCHER_REF_TASKPTR(io_w_ptr)    (list_item_ptr(task_queue))((char *)io_w_ptr - __offset_of(struct list_item_name(task_queue), ec.sock_watcher))
@@ -96,6 +102,7 @@ enum action_t
 {
     act_new_coroutine,
     act_finished_coroutine,
+    act_sched_yield,
 
     act_disk_open,
     act_disk_read,
@@ -195,17 +202,6 @@ union args_u
     struct tcp_accept_arg_s tcp_accept_arg;
 };
 
-struct coroutine_attr_s
-{
-    size_t stacksize;
-};
-
-struct crt_sem_s
-{
-    volatile int value;
-    list_item_ptr(task_queue) task_ptr;
-};
-
 struct ev_controller_s
 {
     ev_io sock_watcher;
@@ -256,8 +252,8 @@ struct coroutine_env_s
         ev_io watcher;
     } worker_ev[BACKGROUND_WORKER_CNT];
 
-    list_head_ptr(task_queue) todo_queue;
-    list_head_ptr(task_queue) doing_queue;
+    list_head_ptr(task_queue) todo_queue;  /* in manager thread context */
+    list_head_ptr(task_queue) doing_queue; /* in background thread context */
 };
 
 /* }}} */
@@ -297,6 +293,13 @@ loop:
                         (void(*)(void))task_ptr->args.init_arg.func,
                         1,
                         task_ptr->args.init_arg.func_arg);
+            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
+            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
+            if (task_ptr->action == act_finished_coroutine)
+                goto loop;
+            break;
+
+        case act_sched_yield:
             coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
             swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
             if (task_ptr->action == act_finished_coroutine)
@@ -1319,6 +1322,23 @@ crt_attr_setstacksize(coroutine_attr_t *attr, size_t stacksize)
 }
 
 int
+crt_sched_yield(void)
+{
+    uint64_t cid;
+    ucontext_t *manager_context, *task_context;
+
+    coroutine_env.curr_task_ptr[ g_thread_id ]->action = act_sched_yield;
+    Push(todo_queue, coroutine_env.curr_task_ptr[ g_thread_id ]);
+    cid = __sync_fetch_and_add(&coroutine_env.info.cid, 0);
+    sem_post(&coroutine_env.manager_sem[ cid % MANAGER_CNT ]);
+
+    coroutine_get_context(&manager_context, &task_context);
+    swapcontext(task_context, manager_context); // goto manager contenxt in manager thread
+
+    return 0;
+}
+
+int
 crt_set_nonblock(int fd)
 {
     int flag;
@@ -1492,6 +1512,10 @@ crt_sem_init(crt_sem_t *sem, int pshared __attribute__((unused)), unsigned int v
     sem->value = value;
     sem->task_ptr = NULL;
 
+    sem->buf_capacity = 0;
+    sem->buf_offset = 0;
+    sem->buf = NULL;
+
     return 0;
 }
 
@@ -1499,8 +1523,19 @@ int
 crt_sem_post(crt_sem_t *sem)
 {
     ++ sem->value;
-    sem->task_ptr->action = act_sem_activation;
-    coroutine_notify_manager(sem->task_ptr);
+    if (sem->task_ptr != NULL)
+    {
+        /* means: one coroutine is waiting in crt_sem_wait()
+         *
+         * if sem->task_ptr == NULL, means: no coroutine is waiting, in that
+         * case, return directly
+         */
+        uint64_t cid;
+        sem->task_ptr->action = act_sem_activation;
+        Push(todo_queue, sem->task_ptr);
+        cid = __sync_fetch_and_add(&coroutine_env.info.cid, 0);
+        sem_post(&coroutine_env.manager_sem[ cid % MANAGER_CNT ]);
+    }
 
     return 0;
 }
@@ -1508,7 +1543,10 @@ crt_sem_post(crt_sem_t *sem)
 /**
  * @brief This function should be ran in manager context.
  *        After calling this, the task_ptr is only stored in sem, both
- *        doing_queue and todo_queue have no record
+ *        doing_queue and todo_queue have no record.
+ *
+ *        NOTE that ONLY one coroutine is allowed to wait one crt_sem_t at a
+ *        given time, otherwise the behavior is undefined.
  */
 int
 crt_sem_wait(crt_sem_t *sem)
@@ -1519,13 +1557,14 @@ crt_sem_wait(crt_sem_t *sem)
     {
         if (sem->value > 0)
         {
+            sem->task_ptr = NULL; /* we don't need switch back, so set it to NULL */
             -- sem->value;
             goto leave;
         }
 
         sem->task_ptr = coroutine_env.curr_task_ptr[ g_thread_id ];
         coroutine_get_context(&manager_context, &task_context);
-        assert(&(sem->task_ptr->task_context) == task_context);
+        assert(&(sem->task_ptr->task_context) == task_context); /* check whether that coroutine who is waiting */
         swapcontext(task_context, manager_context); // goto manager contenxt in manager thread
     }
 
@@ -1536,8 +1575,44 @@ leave:
 int
 crt_sem_destroy(crt_sem_t *sem)
 {
-    sem->value = 0;
-    sem->task_ptr = NULL;
+    memset(sem, 0xCC, sizeof *sem);
+    return 0;
+}
+
+int
+crt_sem_priority_post(crt_sem_t *sem, int flag)
+{
+    uint64_t cid;
+
+    switch (flag)
+    {
+    case CRT_SEM_NORMAL_PRIORITY:
+        crt_sem_post(sem);
+        break;
+
+    case CRT_SEM_HIGH_PRIORITY:
+        abort();
+        break;
+
+    case CRT_SEM_CRITICAL_PRIORITY:
+        ++ sem->value;
+        /* no waiting coroutine exists, so we simply skip the following
+         * procedure
+         */
+        if (sem->task_ptr != NULL)
+        {
+            sem->task_ptr->action = act_sem_activation;
+            Unshift(todo_queue, sem->task_ptr);
+            cid = __sync_fetch_and_add(&coroutine_env.info.cid, 0);
+            sem_post(&coroutine_env.manager_sem[ cid % MANAGER_CNT ]);
+        }
+        break;
+
+    default:
+        abort();
+        break;
+    }
+
     return 0;
 }
 
