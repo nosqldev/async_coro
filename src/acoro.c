@@ -701,6 +701,7 @@ do_tcp_blocked_connect(list_item_ptr(task_queue) task_ptr)
     ret = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof flag);
     if (ret < 0)
     {
+        close(sockfd);
         task_ptr->ret.val = ret;
         task_ptr->ret.err_code = errno;
         task_ptr->action = act_tcp_blocked_connect_done;
@@ -724,6 +725,7 @@ do_tcp_blocked_connect(list_item_ptr(task_queue) task_ptr)
     }
     else
     {
+        close(sockfd);
         task_ptr->ret.val = ret;
         task_ptr->ret.err_code = errno;
         task_ptr->action = act_tcp_blocked_connect_done;
