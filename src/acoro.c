@@ -481,8 +481,15 @@ ev_sock_timeout(struct ev_loop *loop, ev_timer *timer_w, int event)
 
     (void)loop;
 
-    assert(event == EV_TIMEOUT);
+    assert((event & EV_TIMEOUT) || (event & EV_ERROR));
     task_ptr = TIMER_WATCHER_REF_TASKPTR(timer_w);
+    if (event & EV_ERROR)
+    {
+        /* in the case of EV_ERROR, is task_ptr valid? */
+        ev_sock_stop(task_ptr, -1, ENODEV); /* use ENODEV to distinguish between possible errors and EV_ERROR */
+        coroutine_notify_manager(task_ptr);
+        return;
+    }
     if (task_ptr->ec.have_io == 0)
         ev_sock_stop(task_ptr, -1, EWOULDBLOCK);
     else
@@ -500,8 +507,15 @@ ev_sock_read(struct ev_loop *loop, ev_io *io_w, int event)
 
     (void)loop;
 
-    assert(event == EV_READ);
+    assert((event & EV_READ) || (event & EV_ERROR));
     task_ptr = IO_WATCHER_REF_TASKPTR(io_w);
+    if (event & EV_ERROR)
+    {
+        ev_sock_stop(task_ptr, -1, ENODEV);
+        coroutine_notify_manager(task_ptr);
+        return;
+    }
+
     arg = &task_ptr->args.io_arg;
     assert(fcntl(arg->fd, F_GETFL) & O_NONBLOCK);
     assert(task_ptr->action == act_sock_read);
@@ -583,8 +597,15 @@ ev_sock_write(struct ev_loop *loop, ev_io *io_w, int event)
 
     (void)loop;
 
-    assert(event == EV_WRITE);
+    assert((event & EV_WRITE) || (event & EV_ERROR));
     task_ptr = IO_WATCHER_REF_TASKPTR(io_w);
+    if (event & EV_ERROR)
+    {
+        ev_sock_stop(task_ptr, -1, ENODEV);
+        coroutine_notify_manager(task_ptr);
+        return;
+    }
+
     arg = &task_ptr->args.io_arg;
     assert(fcntl(arg->fd, F_GETFL) & O_NONBLOCK);
     assert(task_ptr->action == act_sock_write);
@@ -735,9 +756,16 @@ ev_sock_connect_timeout(struct ev_loop *loop, ev_timer *timer_w, int event)
 {
     list_item_ptr(task_queue) task_ptr;
 
-    assert(event == EV_TIMEOUT);
+    assert((event & EV_TIMEOUT) || (event & EV_ERROR));
     task_ptr = TIMER_WATCHER_REF_TASKPTR(timer_w);
-    ev_sock_connect_stop(loop, task_ptr, -1, EWOULDBLOCK);
+    if (event & EV_ERROR)
+    {
+        ev_sock_connect_stop(loop, task_ptr, -1, ENODEV);
+    }
+    else
+    {
+        ev_sock_connect_stop(loop, task_ptr, -1, EWOULDBLOCK);
+    }
 }
 
 static void
@@ -750,9 +778,17 @@ ev_sock_connect(struct ev_loop *loop, ev_io *io_w, int event)
 
     ret = 0;
     len = sizeof ret;
-    assert((event & EV_READ) || (event & EV_WRITE));
+    assert((event & EV_READ) || (event & EV_WRITE) || (event & EV_ERROR));
     task_ptr = IO_WATCHER_REF_TASKPTR(io_w);
     arg = &task_ptr->args.connect_arg;
+
+    if (event & EV_ERROR)
+    {
+        close(arg->fd);
+        ev_sock_connect_stop(loop, task_ptr, -1, ENODEV);
+        return;
+    }
+
     assert(task_ptr->action = act_tcp_timeout_connect);
     if (getsockopt(arg->fd, SOL_SOCKET, SO_ERROR, &ret, &len) < 0)
     {
@@ -903,7 +939,7 @@ ev_tcp_accept(struct ev_loop *loop, ev_io *io_w, int event)
 
     (void)loop;
 
-    assert(event == EV_READ);
+    assert((event & EV_READ) || (event & EV_ERROR));
     if (event & EV_ERROR)
     {
         accept_fd = -1;
