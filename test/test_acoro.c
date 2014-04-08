@@ -39,13 +39,13 @@ test_init_coroutine_env(void)
     lowest_fd = dup(0);
     close(lowest_fd);
 
-    ret = init_coroutine_env();
+    ret = init_coroutine_env(0);
 
     CU_ASSERT(ret == 0);
     CU_ASSERT(coroutine_env.todo_queue  != NULL);
     CU_ASSERT(coroutine_env.doing_queue != NULL);
 
-    for (int i=0; i<BACKGROUND_WORKER_CNT*2; i++)
+    for (size_t i=0; i<coroutine_env.background_worker_count*2; i++)
     {
         CU_ASSERT(coroutine_env.pipe_channel[i] != 0);
     }

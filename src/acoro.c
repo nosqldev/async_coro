@@ -231,10 +231,12 @@ struct list_item_name(task_queue)
 struct coroutine_env_s
 {
     pthread_t manager_tid[MANAGER_CNT];
-    pthread_t background_worker_tid[BACKGROUND_WORKER_CNT];
+    pthread_t *background_worker_tid; /* default: as large as BACKGROUND_WORKER_CNT */
+
+    size_t background_worker_count; /* default is BACKGROUND_WORKER_CNT */
 
     sem_t manager_sem[MANAGER_CNT];
-    int pipe_channel[BACKGROUND_WORKER_CNT * 2];
+    int *pipe_channel; /* default: as large as double BACKGROUND_WORKER_CNT */
 
     struct
     {
@@ -250,7 +252,7 @@ struct coroutine_env_s
     {
         struct ev_loop *loop;
         ev_io watcher;
-    } worker_ev[BACKGROUND_WORKER_CNT];
+    } *worker_ev; /* default: as many as BACKGROUND_WORKER_CNT */
 
     list_head_ptr(task_queue) todo_queue;  /* in manager thread context */
     list_head_ptr(task_queue) doing_queue; /* in background thread context */
@@ -1233,7 +1235,7 @@ coroutine_notify_background_worker(void)
     assert(g_thread_id == 0);
     c = 0xee;
     Push(doing_queue, coroutine_env.curr_task_ptr[ g_thread_id ]);
-    bg_worker_id = __sync_fetch_and_add(&coroutine_env.info.bg_worker_id, 1) % BACKGROUND_WORKER_CNT;
+    bg_worker_id = __sync_fetch_and_add(&coroutine_env.info.bg_worker_id, 1) % coroutine_env.background_worker_count;
     nwrite = write(coroutine_env.pipe_channel[bg_worker_id * 2 + 1], &c, sizeof c);
     assert(nwrite == sizeof c);
 }
@@ -1249,25 +1251,34 @@ coroutine_get_context(ucontext_t **manager_context, ucontext_t **task_context)
 /* {{{ public interfaces */
 
 int
-init_coroutine_env()
+init_coroutine_env(size_t worker_count)
 {
     int ret;
     int flag;
 
     memset(&coroutine_env, 0, sizeof coroutine_env);
 
+    if (worker_count == 0)
+        coroutine_env.background_worker_count = BACKGROUND_WORKER_CNT;
+    else
+        coroutine_env.background_worker_count = worker_count;
+
     list_new(task_queue, todo_queue);
     coroutine_env.todo_queue = todo_queue;
     list_new(task_queue, doing_queue);
     coroutine_env.doing_queue = doing_queue;
 
-    for (int i=0; i<MANAGER_CNT; i++)
+    coroutine_env.background_worker_tid = acoro_malloc(coroutine_env.background_worker_count * sizeof(pthread_t));
+    coroutine_env.pipe_channel = acoro_malloc(2 * coroutine_env.background_worker_count * sizeof(int));
+    coroutine_env.worker_ev = acoro_malloc(coroutine_env.background_worker_count * sizeof(*coroutine_env.worker_ev));
+
+    for (size_t i=0; i<MANAGER_CNT; i++)
     {
         sem_init(&coroutine_env.manager_sem[i], 0, 0);
         pthread_create(&coroutine_env.manager_tid[i], NULL, new_manager, (void*)(intptr_t)i);
         sched_yield();
     }
-    for (int i=0; i<BACKGROUND_WORKER_CNT; i++)
+    for (size_t i=0; i<coroutine_env.background_worker_count; i++)
     {
         pipe(&coroutine_env.pipe_channel[i*2]);
 
@@ -1298,15 +1309,15 @@ destroy_coroutine_env()
         sem_destroy(&coroutine_env.manager_sem[i]);
         pthread_join(coroutine_env.manager_tid[i], NULL);
     }
-    for (int i=0; i<BACKGROUND_WORKER_CNT; i++)
+    for (size_t i=0; i<coroutine_env.background_worker_count; i++)
     {
         pthread_cancel(coroutine_env.background_worker_tid[i]);
         pthread_join(coroutine_env.background_worker_tid[i], NULL);
     }
-    for (int i=0; i<BACKGROUND_WORKER_CNT*2; i++)
+    for (size_t i=0; i<coroutine_env.background_worker_count*2; i++)
         close(coroutine_env.pipe_channel[i]);
 
-    for (int i=0; i<BACKGROUND_WORKER_CNT; i++)
+    for (size_t i=0; i<coroutine_env.background_worker_count; i++)
     {
         ev_io_stop(coroutine_env.worker_ev[i].loop, &coroutine_env.worker_ev[i].watcher);
         ev_loop_destroy(coroutine_env.worker_ev[i].loop);

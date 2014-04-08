@@ -94,7 +94,7 @@ int crt_sem_priority_post(crt_sem_t *sem, int flag);
 int crt_sem_wait(crt_sem_t *sem);
 int crt_sem_destroy(crt_sem_t *sem);
 
-int init_coroutine_env();
+int init_coroutine_env(size_t worker_count);
 int destroy_coroutine_env();
 int crt_create(coroutine_t *cid, const void * restrict attr, launch_routine_t br, void * restrict arg);
 int crt_attr_setstacksize(coroutine_attr_t *attr, size_t stacksize);
