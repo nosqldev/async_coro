@@ -128,7 +128,7 @@ server(void)
 int
 main(void)
 {
-    init_coroutine_env();
+    init_coroutine_env(0);
     server();
 
     return 0;

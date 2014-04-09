@@ -48,7 +48,7 @@ main(void)
     int pipe_fd[2];
     char c;
 
-    init_coroutine_env();
+    init_coroutine_env(0);
 
     pipe(pipe_fd);
     crt_create(NULL, NULL, bg_run_main_func, (void*)&pipe_fd[1]);

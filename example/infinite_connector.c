@@ -85,7 +85,7 @@ loop:
 int
 main(int argc, char **argv)
 {
-    init_coroutine_env();
+    init_coroutine_env(0);
     alive_cnt = 0;
 
     if (argc != 4)

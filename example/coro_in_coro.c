@@ -38,7 +38,7 @@ main_corotine(void *arg)
 int
 main(void)
 {
-    init_coroutine_env(); 
+    init_coroutine_env(0);
 
     crt_create(NULL, NULL, main_corotine, NULL);
 

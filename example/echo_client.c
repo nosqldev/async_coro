@@ -50,7 +50,7 @@ connector(void *arg)
 int
 main(int argc, char **argv)
 {
-    init_coroutine_env();
+    init_coroutine_env(0);
 
     if (argc != 4)
     {
