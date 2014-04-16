@@ -106,9 +106,20 @@ int crt_set_block(int fd);
 int crt_get_err_code();
 int crt_msleep(uint64_t msec);
 int crt_bg_run(bg_routine_t bg_routine, void *arg, void *result);
+int crt_bg_run2(bg_routine_t bg_routine, void *arg, void *result, uint64_t hashcode);
 int crt_bg_order_run(bg_routine_t bg_routine, void *arg, void *result);
+
+/* {{{ tcp IO */
+
 int crt_tcp_prepare_sock(in_addr_t addr, uint16_t port);
 int crt_tcp_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+
+/* }}} */
+/* {{{ disk IO */
+
+int crt_disk_open(const char *pathname, int flags, ...);
+
+/* }}} */
 
 /* {{{ void     crt_exit(void *) */
 
@@ -116,21 +127,6 @@ int crt_tcp_accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
     coroutine_set_finished_coroutine(); \
     return NULL;                        \
 } while (0)
-
-/* }}} */
-/* {{{ int      crt_disk_open(const char *, int, ...) */
-
-/* Actually, open(2) is a slow call, might be block while disk addressing or io
- * queue is full, etc. */
-#define crt_disk_open(pathname, flags, ...) ({                  \
-    coroutine_set_disk_open(pathname, flags, ##__VA_ARGS__);    \
-    coroutine_notify_background_worker();                       \
-    ucontext_t *manager_context, *task_context;                 \
-    coroutine_get_context(&manager_context, &task_context);     \
-    swapcontext(task_context, manager_context);                 \
-    int retval = coroutine_get_retval();                        \
-    retval;                                                     \
-})
 
 /* }}} */
 /* {{{ ssize_t  crt_disk_read(int fd, void *buf, size_t count) */

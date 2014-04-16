@@ -1665,6 +1665,33 @@ crt_sem_priority_post(crt_sem_t *sem, int flag)
     return 0;
 }
 
+/* {{{ disk IO */
+
+/* Actually, open(2) is a slow call, might be block while disk addressing or io
+ * queue is full, etc. */
+int
+crt_disk_open(const char *pathname, int flags, ...)
+{
+    va_list ap;
+    int retval;
+    ucontext_t *manager_context, *task_context;
+    mode_t mode;
+
+    va_start(ap, flags);
+    mode = va_arg(ap, mode_t);
+    va_end(ap);
+
+    coroutine_set_disk_open(pathname, flags, mode);
+    coroutine_notify_background_worker();
+    coroutine_get_context(&manager_context, &task_context);
+    swapcontext(task_context, manager_context);
+    retval = coroutine_get_retval();
+
+    return retval;
+}
+
+/* }}} */
+
 /* }}} */
 
 /* vim: set expandtab tabstop=4 shiftwidth=4 foldmethod=marker: */
