@@ -301,87 +301,27 @@ loop:
                 goto loop;
             break;
 
+        case act_finished_coroutine:
+            acoro_free(coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr);
+            acoro_free(coroutine_env.curr_task_ptr[ g_thread_id ]);
+            __sync_add_and_fetch(&coroutine_env.info.ran, 1);
+            break;
+
         case act_sched_yield:
-            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
-            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
-            if (task_ptr->action == act_finished_coroutine)
-                goto loop;
-            break;
-
         case act_disk_open_done:
-            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
-            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
-            if (task_ptr->action == act_finished_coroutine)
-                goto loop;
-            break;
-
         case act_disk_read_done:
-            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
-            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
-            if (task_ptr->action == act_finished_coroutine)
-                goto loop;
-            break;
-
         case act_disk_write_done:
-            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
-            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
-            if (task_ptr->action == act_finished_coroutine)
-                goto loop;
-            break;
-
         case act_sock_done:
-            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
-            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
-            if (task_ptr->action == act_finished_coroutine)
-                goto loop;
-            break;
-
         case act_tcp_blocked_connect_done:
-            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
-            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
-            if (task_ptr->action == act_finished_coroutine)
-                goto loop;
-            break;
-
         case act_tcp_timeout_connect_done:
-            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
-            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
-            if (task_ptr->action == act_finished_coroutine)
-                goto loop;
-            break;
-
         case act_msleep_done:
-            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
-            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
-            if (task_ptr->action == act_finished_coroutine)
-                goto loop;
-            break;
-
         case act_bg_run_done:
-            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
-            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
-            if (task_ptr->action == act_finished_coroutine)
-                goto loop;
-            break;
-
         case act_tcp_accept_done:
-            coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
-            swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
-            if (task_ptr->action == act_finished_coroutine)
-                goto loop;
-            break;
-
         case act_sem_activation:
             coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
             swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
             if (task_ptr->action == act_finished_coroutine)
                 goto loop;
-            break;
-
-        case act_finished_coroutine:
-            acoro_free(coroutine_env.curr_task_ptr[ g_thread_id ]->stack_ptr);
-            acoro_free(coroutine_env.curr_task_ptr[ g_thread_id ]);
-            __sync_add_and_fetch(&coroutine_env.info.ran, 1);
             break;
 
         default:
