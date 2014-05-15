@@ -624,7 +624,6 @@ ev_realloc_emul (void *ptr, long size)
 
   free (ptr);
   return 0;
-#endif
 }
 
 static void *(*alloc)(void *ptr, long size) = ev_realloc_emul;
