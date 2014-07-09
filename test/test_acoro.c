@@ -126,7 +126,7 @@ null_coroutine(void *arg)
 {
     /* XXX Why crash when using printf() with arguments? */
     /*printf("hello, %s\n", "world");*/
-    CU_ASSERT((intptr_t)arg == 0xbeef);
+    CU_ASSERT((intptr_t)arg == 0x12345678feedbeef);
 
     crt_exit(NULL);
 }
@@ -140,7 +140,7 @@ test_null_coroutine(void)
     CU_ASSERT(coroutine_env.info.cid == 0);
     CU_ASSERT(coroutine_env.info.ran == 0);
 
-    ret = crt_create(&cid, NULL, null_coroutine, (void*)(intptr_t)0xbeef);
+    ret = crt_create(&cid, NULL, null_coroutine, (void*)(intptr_t)0x12345678feedbeef);
 
     CU_ASSERT(coroutine_env.info.cid == 1);
     CU_ASSERT(cid == 1);

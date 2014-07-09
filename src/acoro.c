@@ -265,6 +265,19 @@ struct coroutine_env_s coroutine_env;
 
 /* {{{ manager thread */
 
+#ifdef __x86_64__
+
+static void
+call_wrapper(uint32_t func_low, uint32_t func_high, uint32_t args_low, uint32_t args_high)
+{
+    launch_routine_t func_ptr = (launch_routine_t)((uint64_t)func_high << 32 | func_low);
+    uintptr_t args = ((uintptr_t)args_high) << 32 | args_low;
+
+    (*func_ptr)((void *)args);
+}
+
+#endif /* __x86_64__ */
+
 static void *
 new_manager(void *arg)
 {
@@ -291,10 +304,34 @@ loop:
             task_ptr->task_context.uc_stack.ss_sp = task_ptr->stack_ptr;
             task_ptr->task_context.uc_stack.ss_size = task_ptr->args.init_arg.stack_size;
             task_ptr->task_context.uc_link = &coroutine_env.manager_context;
+#ifdef __x86_64__
+
+#pragma pack(push)
+#pragma pack(1)
+            struct transporter_s
+            {
+                uint32_t tmp_store1; /* low */
+                uint32_t tmp_store2; /* high */
+            };
+            struct transporter_s transporter_func, transporter_arg;
+            memcpy(&transporter_func, &task_ptr->args.init_arg.func, sizeof task_ptr->args.init_arg.func);
+            memcpy(&transporter_arg, &task_ptr->args.init_arg.func_arg, sizeof task_ptr->args.init_arg.func_arg);
+
+            typedef void (*makecontenxt_func_ptr_t)();
+            makecontext(&task_ptr->task_context,
+                        (makecontenxt_func_ptr_t)call_wrapper,
+                        4,
+                        transporter_func.tmp_store1,
+                        transporter_func.tmp_store2,
+                        transporter_arg.tmp_store1,
+                        transporter_arg.tmp_store2);
+#pragma pack(pop)
+#else /* __x86_32__ */
             makecontext(&task_ptr->task_context,
                         (void(*)(void))task_ptr->args.init_arg.func,
                         1,
                         task_ptr->args.init_arg.func_arg);
+#endif /* ! __x86_64__ */
             coroutine_env.curr_task_ptr[ g_thread_id ] = task_ptr;
             swapcontext(&coroutine_env.manager_context, &task_ptr->task_context);
             if (task_ptr->action == act_finished_coroutine)
